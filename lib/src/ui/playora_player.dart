@@ -66,6 +66,7 @@ class PlayoraPlayer extends StatefulWidget {
     this.badge,
     this.loading = false,
     this.fullscreenOnPlay = false,
+    this.orientationsAfterFullscreen = DeviceOrientation.values,
     this.analytics,
     this.resume = true,
     this.resolveResume,
@@ -159,8 +160,13 @@ class PlayoraPlayer extends StatefulWidget {
   /// Also shown automatically while a provider source resolves.
   final bool loading;
 
-  /// Enter fullscreen when playback starts from the cover.
+  /// Enter fullscreen when playback starts — from the cover tap, or right
+  /// away when [autoPlay] (or a pre-roll) starts playback by itself.
   final bool fullscreenOnPlay;
+
+  /// Orientations restored when leaving fullscreen. Pass the portrait pair
+  /// in a portrait-locked app; defaults to all orientations.
+  final List<DeviceOrientation> orientationsAfterFullscreen;
 
   /// Built-in Logplex analytics + resume. Omit to disable (no network calls).
   final LogplexAnalyticsConfig? analytics;
@@ -422,10 +428,14 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     if (pre != null) {
       _coverDismissed = true;
       _resumeAfterAd = Duration.zero;
+      _maybeFullscreenOnAutoStart();
       await _playAd(pre);
       return;
     }
-    if (widget.autoPlay) _coverDismissed = true;
+    if (widget.autoPlay) {
+      _coverDismissed = true;
+      _maybeFullscreenOnAutoStart();
+    }
     await _loadContent(play: widget.autoPlay);
   }
 
@@ -696,6 +706,15 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
 
   // -------------------------------------------------------------- fullscreen
 
+  /// [fullscreenOnPlay] applied to self-starting playback (autoplay or a
+  /// pre-roll) — the cover is never shown, so its onPlay hook never fires.
+  void _maybeFullscreenOnAutoStart() {
+    if (!widget.fullscreenOnPlay || _isFullscreen) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_isFullscreen) _toggleFullscreen();
+    });
+  }
+
   Future<void> _toggleFullscreen() async {
     if (_isFullscreen) {
       Navigator.of(context, rootNavigator: true).maybePop();
@@ -743,7 +762,8 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   Future<void> _exitSystemFullscreen() async {
     if (!_mobile) return;
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    await SystemChrome.setPreferredOrientations(
+        widget.orientationsAfterFullscreen);
   }
 
   // ------------------------------------------------------------------- build

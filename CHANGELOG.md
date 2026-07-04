@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1
+
+- `orientationsAfterFullscreen`: orientations restored when leaving fullscreen
+  (pass the portrait pair in a portrait-locked app). Defaults to all
+  orientations, matching the previous behavior.
+- `fullscreenOnPlay` now also applies when playback starts by itself —
+  `autoPlay: true` or a pre-roll — not just on the cover's play tap.
+
 ## 0.1.0
 
 Initial release — feature-parity Flutter port of logplex-player-react:
