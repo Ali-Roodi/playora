@@ -230,6 +230,10 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   _PositionedAdBreak? _activeAd;
   Duration? _resumeAfterAd;
 
+  /// Content duration captured when a post-roll starts (the controller's
+  /// duration belongs to the ad creative while it plays).
+  Duration _contentEnd = Duration.zero;
+
   // Episodes.
   String? _episodeId;
   bool _wasPlaying = false;
@@ -608,10 +612,9 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       await _loadContent(play: true, startAt: resumeAt);
     } else {
       // Post-roll → the content stays ended (last frame, paused).
-      final end = _controller.duration.value;
       await _loadContent(
         play: false,
-        startAt: end > Duration.zero ? end : null,
+        startAt: _contentEnd > Duration.zero ? _contentEnd : null,
       );
     }
     _tracker?.resumeTracking();
@@ -641,6 +644,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     final post = _nextPendingAd((b) => b.brk.offset.isPost);
     if (post != null) {
       _resumeAfterAd = null; // content stays ended after a post-roll
+      _contentEnd = _controller.duration.value;
       _playAd(post);
       return;
     }

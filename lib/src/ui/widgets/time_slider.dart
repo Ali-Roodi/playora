@@ -227,8 +227,10 @@ class _PreviewBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final cue = thumbnails?.cueAt(time);
     const bubbleWidth = 148.0;
-    final left =
-        (width * fraction - bubbleWidth / 2).clamp(0.0, width - bubbleWidth);
+    final maxLeft = width - bubbleWidth;
+    final left = maxLeft <= 0
+        ? 0.0
+        : (width * fraction - bubbleWidth / 2).clamp(0.0, maxLeft);
     return Positioned(
       left: left,
       bottom: 40,
