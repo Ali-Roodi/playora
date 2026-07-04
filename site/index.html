@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Playora — Flutter video player · docs &amp; live demo</title>
+  <meta name="description" content="Playora — a production Flutter video player. HLS/MP4, custom RTL/LTR gold-on-dark skin, quality / subtitle / audio menus, ads, gestures, playlists & seasons, and optional built-in analytics + resume." />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="apple-touch-icon" href="./favicon.svg" />
+  <style>
+    @font-face {
+      font-family: Vazirmatn;
+      src: url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Regular.woff2) format("woff2");
+      font-weight: 400; font-display: swap;
+    }
+    @font-face {
+      font-family: Vazirmatn;
+      src: url(https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/fonts/webfonts/Vazirmatn-Bold.woff2) format("woff2");
+      font-weight: 700; font-display: swap;
+    }
+    :root{
+      --bg:#0d0d0f; --bg-2:#15151a; --surface:#1a1a20; --border:#26262e;
+      --text:#e9e9ee; --muted:#9a9aa6; --accent:#e8b84b; --accent-2:#f0c96a;
+      --radius:14px; --max:1080px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth;scroll-padding-top:80px}
+    body{
+      margin:0;color:var(--text);
+      background:radial-gradient(1200px 600px at 50% -10%,#1b1b22 0%,var(--bg) 60%);
+      font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+    }
+    html[lang="fa"] body{font-family:Vazirmatn,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+    a{color:var(--accent);text-decoration:none}
+    a:hover{text-decoration:underline}
+    code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.85em}
+
+    .dx-header{
+      position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;
+      padding:14px 24px;background:#0d0d0fcc;-webkit-backdrop-filter:blur(12px);
+      backdrop-filter:blur(12px);border-bottom:1px solid var(--border);
+    }
+    .dx-logo{font-weight:800;letter-spacing:.01em;font-size:16px;color:var(--text);display:flex;align-items:center;gap:9px}
+    .dx-logo:hover{text-decoration:none}
+    .dx-logo b{color:var(--accent)}
+    .dx-logo svg{width:22px;height:22px;flex:none}
+    .dx-header nav{display:flex;gap:18px;margin-inline-start:auto;font-size:14px}
+    .dx-header nav a{color:var(--muted)}
+    .dx-header nav a:hover{color:var(--text);text-decoration:none}
+    .dx-lang{
+      flex:none;font-size:12.5px;font-weight:700;color:var(--muted);cursor:pointer;
+      background:var(--surface);border:1px solid var(--border);border-radius:999px;
+      padding:5px 13px;font-family:inherit;
+    }
+    .dx-lang:hover{color:var(--accent);border-color:var(--accent)}
+    .dx-gh{flex:none;display:flex;align-items:center;color:var(--muted)}
+    .dx-gh:hover{color:var(--text)}
+    .dx-gh svg{width:20px;height:20px;fill:currentColor}
+
+    .dx-main{max-width:var(--max);margin:0 auto;padding:0 24px 96px}
+
+    .dx-hero{text-align:center;padding:64px 0 40px}
+    .dx-hero h1{font-size:44px;margin:0 0 12px;letter-spacing:-.02em}
+    .dx-hero h1 b{color:var(--accent)}
+    .dx-hero p{font-size:18px;color:var(--muted);max-width:680px;margin:0 auto 24px}
+    .dx-badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:28px}
+    .dx-pill{
+      font-size:12px;color:var(--muted);background:var(--surface);
+      border:1px solid var(--border);border-radius:999px;padding:5px 13px;
+    }
+    .dx-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+    .dx-btn{
+      display:inline-block;padding:11px 26px;border-radius:10px;font-weight:700;font-size:14.5px;
+      border:1px solid var(--border);color:var(--text);background:var(--surface);
+    }
+    .dx-btn:hover{text-decoration:none;border-color:var(--accent)}
+    .dx-btn.gold{background:var(--accent);border-color:var(--accent);color:#141416}
+    .dx-btn.gold:hover{background:var(--accent-2);border-color:var(--accent-2)}
+
+    section{padding:34px 0 6px}
+    h2{font-size:26px;margin:0 0 6px;letter-spacing:-.01em}
+    h2 .hash{color:var(--accent);margin-inline-end:8px}
+    .intro{color:var(--muted);max-width:760px;margin:0 0 20px}
+
+    .demo-frame{
+      position:relative;width:100%;aspect-ratio:16/9;background:#000;
+      border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;
+      box-shadow:0 22px 60px -18px rgba(0,0,0,.75);
+    }
+    .demo-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+    .demo-note{font-size:13px;color:var(--muted);margin-top:12px;text-align:center}
+
+    pre{
+      direction:ltr;text-align:left;position:relative;background:var(--bg-2);
+      border:1px solid var(--border);border-radius:var(--radius);
+      padding:18px 20px;overflow-x:auto;line-height:1.6;margin:14px 0;
+    }
+    pre code{font-size:13px;color:#d7d7e0;display:block;white-space:pre}
+    .tok-c{color:#6f6f7c;font-style:italic}
+    .tok-s{color:#e8b84b}
+    .tok-k{color:#f0c96a;font-weight:600}
+    .tok-t{color:#8ab4f8}
+    .copy{
+      position:absolute;top:10px;right:10px;font-size:11.5px;color:var(--muted);cursor:pointer;
+      background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:4px 10px;
+      font-family:inherit;
+    }
+    .copy:hover{color:var(--accent);border-color:var(--accent)}
+
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-top:18px}
+    .card{
+      background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+      padding:16px 18px;
+    }
+    .card h3{margin:0 0 6px;font-size:14.5px;color:var(--accent-2)}
+    .card p{margin:0;font-size:13px;color:var(--muted)}
+
+    .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);margin-top:18px}
+    table{border-collapse:collapse;width:100%;min-width:720px;font-size:13.5px}
+    th,td{padding:11px 16px;border-bottom:1px solid var(--border);text-align:start;vertical-align:top}
+    th{color:var(--accent);font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;background:var(--bg-2)}
+    tr:last-child td{border-bottom:0}
+    td code{color:var(--accent-2);white-space:nowrap}
+    td.desc{color:var(--muted)}
+
+    .plat{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    .plat span{
+      font-size:13px;padding:7px 16px;border-radius:999px;
+      background:var(--surface);border:1px solid var(--border);color:var(--text);
+    }
+
+    footer{
+      border-top:1px solid var(--border);color:var(--muted);font-size:13px;
+      text-align:center;padding:26px 24px 34px;
+    }
+
+    html[dir="rtl"] .copy{right:auto;left:10px}
+    @media (max-width:640px){
+      .dx-hero h1{font-size:34px}
+      .dx-header nav{display:none}
+    }
+  </style>
+</head>
+<body>
+
+<header class="dx-header">
+  <a class="dx-logo" href="#top">
+    <svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="16" fill="#E8B84B"/><path d="M26 20 L46 32 L26 44 Z" fill="#1A1A1A"/></svg>
+    Play<b>ora</b>
+  </a>
+  <nav>
+    <a href="#demo" data-t="nav.demo">Live demo</a>
+    <a href="#start" data-t="nav.start">Quick start</a>
+    <a href="#features" data-t="nav.features">Features</a>
+    <a href="#guides" data-t="nav.guides">Guides</a>
+    <a href="#api" data-t="nav.api">API</a>
+  </nav>
+  <button class="dx-lang" id="langBtn">فارسی</button>
+  <a class="dx-gh" href="https://github.com/Ali-Roodi/playora" target="_blank" rel="noopener" aria-label="GitHub">
+    <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+  </a>
+</header>
+
+<main class="dx-main" id="top">
+
+  <div class="dx-hero">
+    <h1>🎬 Play<b>ora</b></h1>
+    <p data-t="hero.tagline">A production Flutter video player — HLS/MP4, a fully custom RTL/LTR gold-on-dark skin, quality / subtitle / audio menus, ads, gestures, playlists &amp; seasons, and optional built-in analytics + resume.</p>
+    <div class="dx-badges" id="pills"></div>
+    <div class="dx-cta">
+      <a class="dx-btn gold" href="#demo" data-t="hero.ctaDemo">▶ Live demo</a>
+      <a class="dx-btn" href="https://github.com/Ali-Roodi/playora" target="_blank" rel="noopener" data-t="hero.ctaGh">GitHub</a>
+    </div>
+  </div>
+
+  <section id="demo">
+    <h2><span class="hash">#</span><span data-t="demo.title">Live demo</span></h2>
+    <p class="intro" data-t="demo.intro">The real example app, compiled to the web — the same player that ships in the package. HLS with quality levels, playlist, ads, gestures and the full skin.</p>
+    <div class="demo-frame">
+      <iframe src="./demo/" title="Playora live demo" allow="fullscreen; autoplay" allowfullscreen loading="lazy"></iframe>
+    </div>
+    <p class="demo-note">
+      <span data-t="demo.note">Gestures are mobile-first — open the demo full-page on a phone for the complete experience.</span>
+      <a href="./demo/" target="_blank" rel="noopener" data-t="demo.open">Open full-page ↗</a>
+    </p>
+  </section>
+
+  <section id="start">
+    <h2><span class="hash">#</span><span data-t="start.title">Quick start</span></h2>
+    <p class="intro" data-t="start.intro">Add the git dependency, initialize media_kit once, then point the player at an HLS or MP4 source.</p>
+<pre><code><span class="tok-c"># pubspec.yaml</span>
+<span class="tok-k">dependencies:</span>
+  <span class="tok-k">playora:</span>
+    <span class="tok-k">git:</span>
+      <span class="tok-k">url:</span> <span class="tok-s">https://github.com/Ali-Roodi/playora.git</span></code></pre>
+<pre><code><span class="tok-k">void</span> main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  <span class="tok-t">MediaKit</span>.ensureInitialized();
+  runApp(<span class="tok-k">const</span> MyApp());
+}</code></pre>
+<pre><code><span class="tok-k">import</span> <span class="tok-s">'package:playora/playora.dart'</span>;
+
+<span class="tok-t">PlayoraPlayer</span>(
+  src: <span class="tok-s">'https://cdn.example.com/movie/master.m3u8'</span>,
+  poster: <span class="tok-s">'https://cdn.example.com/poster.jpg'</span>,
+  title: <span class="tok-s">'Sample Movie'</span>,
+  locale: <span class="tok-t">PlayerLocale</span>.fa, <span class="tok-c">// fa (RTL) | en (LTR)</span>
+)</code></pre>
+    <p class="intro" data-t="start.outro">That's it — a self-contained player with zero network calls beyond the stream itself. Analytics, resume and providers are all opt-in.</p>
+  </section>
+
+  <section id="features">
+    <h2><span class="hash">#</span><span data-t="features.title">Features</span></h2>
+    <div class="grid" id="featGrid"></div>
+  </section>
+
+  <section id="guides">
+    <h2><span class="hash">#</span><span data-t="playlist.title">Episodes, seasons &amp; up-next</span></h2>
+    <p class="intro" data-t="playlist.intro">Provide a list of episodes and the playlist panel with prev/next nav appears automatically. Episode.group renders sticky season headers, and near the end of an episode an up-next card (cover + filling progress) offers the next one — or auto-advances.</p>
+<pre><code><span class="tok-k">final</span> episodes = [
+  <span class="tok-t">Episode</span>(id: <span class="tok-s">'e1'</span>, src: <span class="tok-s">'.../e1.m3u8'</span>, title: <span class="tok-s">'سریال'</span>, subtitle: <span class="tok-s">'قسمت اول'</span>, group: <span class="tok-s">'فصل اول'</span>),
+  <span class="tok-t">Episode</span>(id: <span class="tok-s">'e2'</span>, src: <span class="tok-s">'.../e2.m3u8'</span>, title: <span class="tok-s">'سریال'</span>, subtitle: <span class="tok-s">'قسمت دوم'</span>, group: <span class="tok-s">'فصل اول'</span>),
+];
+
+<span class="tok-t">PlayoraPlayer</span>(
+  episodes: episodes,
+  currentEpisodeId: current,
+  onEpisodeChange: (id) =&gt; setState(() =&gt; current = id),
+)</code></pre>
+
+    <h2 style="margin-top:38px"><span class="hash">#</span><span data-t="ads.title">Ads</span></h2>
+    <p class="intro" data-t="ads.intro">Pre-roll, mid-rolls (at content positions) and post-roll, with skip countdown and click-through. The player handles playback and resumes the content afterwards; ad playback is never counted in content analytics.</p>
+<pre><code><span class="tok-t">PlayoraPlayer</span>(
+  src: src,
+  <span class="tok-c">// Pre-roll shorthand:</span>
+  ad: <span class="tok-k">const</span> <span class="tok-t">AdConfig</span>(src: <span class="tok-s">'https://ads.example.com/creative.m3u8'</span>, clickThrough: <span class="tok-s">'https://sponsor.example.com'</span>),
+  <span class="tok-c">// …or multiple breaks:</span>
+  ads: [
+    <span class="tok-k">const</span> <span class="tok-t">AdBreak</span>(src: <span class="tok-s">'...'</span>, offset: <span class="tok-t">AdOffset</span>.pre),
+    <span class="tok-t">AdBreak</span>(src: <span class="tok-s">'...'</span>, offset: <span class="tok-t">AdOffset</span>.at(<span class="tok-k">const</span> <span class="tok-t">Duration</span>(minutes: <span class="tok-s">10</span>))),
+    <span class="tok-k">const</span> <span class="tok-t">AdBreak</span>(src: <span class="tok-s">'...'</span>, offset: <span class="tok-t">AdOffset</span>.post),
+  ],
+)</code></pre>
+
+    <h2 style="margin-top:38px"><span class="hash">#</span><span data-t="analytics.title">Analytics &amp; resume (optional)</span></h2>
+    <p class="intro" data-t="analytics.intro">Analytics is entirely optional — the player works fully without it. Pass a config and it emits canonical playback events to your ingest endpoint (batched, retried, heartbeats) and offers a “continue watching” banner from the saved position. No extra wiring.</p>
+<pre><code><span class="tok-t">PlayoraPlayer</span>(
+  src: src,
+  analytics: <span class="tok-k">const</span> <span class="tok-t">LogplexAnalyticsConfig</span>(
+    baseUrl: <span class="tok-s">'https://ingest.example.com'</span>,
+    apiKey: <span class="tok-s">'…'</span>, userId: <span class="tok-s">'viewer-1'</span>,
+    contentId: <span class="tok-s">'movie-42'</span>, contentType: <span class="tok-s">'movie'</span>,
+  ),
+  resume: <span class="tok-k">true</span>, <span class="tok-c">// continue-watching banner</span>
+)</code></pre>
+
+    <h2 style="margin-top:38px"><span class="hash">#</span><span data-t="backend.title">Your own back-end</span></h2>
+    <p class="intro" data-t="backend.intro">No Logplex back-end needed: exchange an opaque play token via a VOD provider, report a periodic watch heartbeat to your own tracker, and feed the resume banner from your own API.</p>
+<pre><code><span class="tok-t">PlayoraPlayer</span>(
+  src: playToken,                             <span class="tok-c">// opaque token for the provider</span>
+  vodType: <span class="tok-t">VodProvider</span>.abrHamrahi,            <span class="tok-c">// standard | abrHamrahi | poyan</span>
+  qualityValidate: (height) =&gt; height &gt; <span class="tok-s">400</span>,  <span class="tok-c">// hide tiny renditions</span>
+
+  onWatchInterval: (info) <span class="tok-k">async</span> {
+    <span class="tok-k">final</span> id = <span class="tok-k">await</span> reportWatch(info);       <span class="tok-c">// your tracker</span>
+    <span class="tok-k">return</span> id;                                <span class="tok-c">// chained into the next call</span>
+  },
+
+  resolveResume: () <span class="tok-k">async</span> {
+    <span class="tok-k">final</span> w = <span class="tok-k">await</span> getWatch(contentId);
+    <span class="tok-k">return</span> w == <span class="tok-k">null</span> ? <span class="tok-k">null</span> : <span class="tok-t">ResumePoint</span>(position: <span class="tok-t">Duration</span>(seconds: w.seconds));
+  },
+)</code></pre>
+
+    <h2 style="margin-top:38px"><span class="hash">#</span><span data-t="theming.title">Theming &amp; localization</span></h2>
+    <p class="intro" data-t="theming.intro">Theme via design tokens, switch between dark and light, and flip the language with locale. RTL only right-aligns text — controls, seek direction and gestures stay physical, like YouTube.</p>
+<pre><code><span class="tok-t">PlayoraPlayer</span>(
+  appearance: <span class="tok-t">PlayerAppearance</span>.dark,                 <span class="tok-c">// dark | light</span>
+  theme: <span class="tok-k">const</span> <span class="tok-t">PlayoraTheme</span>(accent: <span class="tok-t">Color</span>(<span class="tok-s">0xFFE8B84B</span>)),
+  locale: <span class="tok-t">PlayerLocale</span>.fa,                           <span class="tok-c">// RTL text; layout stays physical</span>
+  strings: myCustomStrings,                          <span class="tok-c">// override any label</span>
+)</code></pre>
+  </section>
+
+  <section id="api">
+    <h2><span class="hash">#</span><span data-t="api.title">API overview</span></h2>
+    <p class="intro" data-t="api.intro">The most important PlayoraPlayer parameters. Everything is optional except a source (src / sources / episodes).</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th data-t="api.hProp">Parameter</th><th data-t="api.hType">Type</th><th data-t="api.hDesc">Description</th></tr></thead>
+      <tbody id="apiRows"></tbody>
+    </table></div>
+
+    <h2 style="margin-top:38px"><span class="hash">#</span><span data-t="plat.title">Platforms</span></h2>
+    <p class="intro" data-t="plat.intro">Runs everywhere Flutter does — web uses hls.js under the hood, via media_kit.</p>
+    <div class="plat">
+      <span>🤖 Android</span><span>🍎 iOS</span><span>🪟 Windows</span><span>🖥 macOS</span><span>🐧 Linux</span><span>🌐 Web</span>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <span data-t="footer">playora · built on media_kit + hls.js · Developed by Ali Roodi · MIT</span>
+</footer>
+
+<script>
+const C = {
+  en: {
+    dir: "ltr", langBtn: "فارسی",
+    "nav.demo":"Live demo","nav.start":"Quick start","nav.features":"Features","nav.guides":"Guides","nav.api":"API",
+    "hero.tagline":"A production Flutter video player — HLS/MP4, a fully custom RTL/LTR gold-on-dark skin, quality / subtitle / audio menus, ads, gestures, playlists & seasons, and optional built-in analytics + resume.",
+    "hero.ctaDemo":"▶ Live demo","hero.ctaGh":"GitHub",
+    pills:["Flutter 3+","media_kit + hls.js","Dart 3","RTL / LTR","6 platforms","MIT"],
+    "demo.title":"Live demo",
+    "demo.intro":"The real example app, compiled to the web — the same player that ships in the package. HLS with quality levels, playlist, ads, gestures and the full skin.",
+    "demo.note":"Gestures are mobile-first — open the demo full-page on a phone for the complete experience. ",
+    "demo.open":"Open full-page ↗",
+    "start.title":"Quick start",
+    "start.intro":"Add the git dependency, initialize media_kit once, then point the player at an HLS or MP4 source.",
+    "start.outro":"That's it — a self-contained player with zero network calls beyond the stream itself. Analytics, resume and providers are all opt-in.",
+    "features.title":"Features",
+    features:[
+      ["HLS + MP4","Adaptive HLS (auto quality from the manifest) or progressive MP4 — or a list of MP4 renditions for a manual quality menu."],
+      ["Custom skin","Dark, gold-accented, light mode, RTL/LTR, fully responsive. Layout stays physical; RTL only right-aligns text."],
+      ["Quality & speed","Quality menu from the real HLS renditions (filter with qualityValidate); separate speed menu."],
+      ["Subtitles & audio","Embedded HLS subtitle and multi-language audio tracks auto-detected; add external WebVTT/SRT files on top."],
+      ["Scrub previews","WebVTT thumbnail tracks — individual images or #xywh sprite sheets."],
+      ["Playlist & seasons","Episode panel with sticky season headers, prev/next, auto-advance."],
+      ["Up-next card","Near an episode's end, a cover + progress card jumps to the next one (or auto-advances)."],
+      ["Ads","Pre-roll, mid-rolls (at content positions) and post-roll, with skip countdown + click-through."],
+      ["Gestures","Double-tap ±10s, long-press 2×, brightness/volume swipes; desktop gets click-to-pause + hover-reveal."],
+      ["Fullscreen","Route-based fullscreen with automatic landscape + immersive mode on mobile."],
+      ["Overlays","Like button, premium info badge, operator notice banner, blocking IP/network restriction."],
+      ["VOD providers","Exchange an opaque play token for the real stream via a provider API (ABR Hamrahi, Poyan)."],
+      ["Built-in analytics","Canonical play/pause/seek/buffer/heartbeat/complete events to your ingest endpoint — optional."],
+      ["Resume","“Continue watching” banner — from analytics or your own resolveResume back-end."],
+      ["External tracker","Periodic “user watch” heartbeat to your own back-end via onWatchInterval."],
+      ["Persistence & i18n","Remember volume/mute/speed/brightness; fa / en built in with Persian digits and overridable strings."]
+    ],
+    "playlist.title":"Episodes, seasons & up-next",
+    "playlist.intro":"Provide a list of episodes and the playlist panel with prev/next nav appears automatically. Episode.group renders sticky season headers, and near the end of an episode an up-next card (cover + filling progress) offers the next one — or auto-advances.",
+    "ads.title":"Ads",
+    "ads.intro":"Pre-roll, mid-rolls (at content positions) and post-roll, with skip countdown and click-through. The player handles playback and resumes the content afterwards; ad playback is never counted in content analytics.",
+    "analytics.title":"Analytics & resume (optional)",
+    "analytics.intro":"Analytics is entirely optional — the player works fully without it. Pass a config and it emits canonical playback events to your ingest endpoint (batched, retried, heartbeats) and offers a “continue watching” banner from the saved position. No extra wiring.",
+    "backend.title":"Your own back-end",
+    "backend.intro":"No Logplex back-end needed: exchange an opaque play token via a VOD provider, report a periodic watch heartbeat to your own tracker, and feed the resume banner from your own API.",
+    "theming.title":"Theming & localization",
+    "theming.intro":"Theme via design tokens, switch between dark and light, and flip the language with locale. RTL only right-aligns text — controls, seek direction and gestures stay physical, like YouTube.",
+    "api.title":"API overview",
+    "api.intro":"The most important PlayoraPlayer parameters. Everything is optional except a source (src / sources / episodes).",
+    "api.hProp":"Parameter","api.hType":"Type","api.hDesc":"Description",
+    api:[
+      ["src / sources","String / List<VideoSource>","HLS/MP4 URL, or MP4 renditions for a manual quality menu. For a non-standard vodType, an opaque play token."],
+      ["vodType / vodCustomUrl","VodProvider / Map","Provider token exchange (ABR Hamrahi, Poyan); {token} is substituted in the endpoint."],
+      ["qualityValidate","bool Function(int height)","Hide embedded renditions whose height fails the predicate. Auto stays available."],
+      ["poster / title / episodeLabel","String","Cover image and titles above the scrubber."],
+      ["thumbnails","String","WebVTT thumbnails track for scrub previews."],
+      ["subtitles","List<ExternalSubtitle>","External subtitle files (embedded tracks are auto-detected)."],
+      ["locale / textDirection","PlayerLocale / TextDirection?","UI language and direction. fa → RTL."],
+      ["theme / appearance","PlayoraTheme / PlayerAppearance","Design token overrides and dark/light color scheme."],
+      ["episodes / currentEpisodeId / onEpisodeChange","—","Controlled playlist; Episode.group adds season headers and enables the up-next card."],
+      ["ad / ads","AdConfig / List<AdBreak>","Pre-roll shorthand, or breaks at pre/post/AdOffset.at(...)."],
+      ["notice / restriction / badge","—","Operator notice, blocking overlay, transient info pill."],
+      ["analytics / resume / resolveResume","—","Built-in analytics, resume banner, host-driven resume."],
+      ["onWatchInterval / watchInterval","—","External watch heartbeat + cadence (default 5s)."],
+      ["onPlayerReady","ValueChanged<PlayoraController?>","Imperative control — seek, pause, tracks, …"],
+      ["persistSettings / settingsKey","bool / String","Remember volume/mute/speed/brightness across sessions."],
+      ["fullscreenOnPlay / onBack / onLike / liked / loading","—","Behavior toggles & host hooks."],
+      ["overlayBuilder","List<Widget> Function(BuildContext)","Extra overlays inside the player surface."]
+    ],
+    "plat.title":"Platforms",
+    "plat.intro":"Runs everywhere Flutter does — web uses hls.js under the hood, via media_kit.",
+    "footer":"playora · built on media_kit + hls.js · Developed by Ali Roodi · MIT"
+  },
+  fa: {
+    dir: "rtl", langBtn: "English",
+    "nav.demo":"دموی زنده","nav.start":"شروع سریع","nav.features":"امکانات","nav.guides":"راهنماها","nav.api":"API",
+    "hero.tagline":"یک پخش‌کنندهٔ ویدئوی فلاتر آمادهٔ تولید — HLS/MP4، پوستهٔ کاملاً اختصاصی طلایی-تیره با پشتیبانی راست‌به‌چپ، منوی کیفیت/زیرنویس/صدا، تبلیغات، ژست‌های لمسی، لیست پخش و فصل‌ها، و آنالیتیکس و «ادامهٔ تماشا»ی داخلی (اختیاری).",
+    "hero.ctaDemo":"▶ دموی زنده","hero.ctaGh":"گیت‌هاب",
+    pills:["Flutter 3+","media_kit + hls.js","Dart 3","راست‌چین / چپ‌چین","۶ پلتفرم","MIT"],
+    "demo.title":"دموی زنده",
+    "demo.intro":"همان اپ نمونهٔ واقعی، کامپایل‌شده برای وب — همان پلیری که در پکیج عرضه می‌شود. HLS با سطوح کیفیت، لیست پخش، تبلیغ، ژست‌ها و پوستهٔ کامل.",
+    "demo.note":"ژست‌ها برای موبایل طراحی شده‌اند — برای تجربهٔ کامل، دمو را روی گوشی تمام‌صفحه باز کنید. ",
+    "demo.open":"باز کردن تمام‌صفحه ↗",
+    "start.title":"شروع سریع",
+    "start.intro":"وابستگی گیت را اضافه کنید، media_kit را یک بار مقداردهی کنید و سپس پلیر را به یک منبع HLS یا MP4 وصل کنید.",
+    "start.outro":"همین! یک پلیر کاملاً مستقل، بدون هیچ درخواست شبکه‌ای جز خود استریم. آنالیتیکس، ادامهٔ تماشا و پرووایدرها همگی اختیاری‌اند.",
+    "features.title":"امکانات",
+    features:[
+      ["HLS + MP4","پخش تطبیقی HLS (کیفیت خودکار از منیفست) یا MP4 معمولی — یا فهرستی از نسخه‌های MP4 برای منوی کیفیت دستی."],
+      ["پوستهٔ اختصاصی","تیره با لهجهٔ طلایی، حالت روشن، راست‌چین/چپ‌چین و کاملاً واکنش‌گرا. چیدمان فیزیکی می‌ماند؛ RTL فقط متن را راست‌چین می‌کند."],
+      ["کیفیت و سرعت","منوی کیفیت از نسخه‌های واقعی HLS (با qualityValidate فیلتر کنید)؛ منوی سرعت جداگانه."],
+      ["زیرنویس و صدا","زیرنویس‌های داخل HLS و ترک‌های صوتی چندزبانه خودکار شناسایی می‌شوند؛ فایل‌های WebVTT/SRT خارجی هم اضافه کنید."],
+      ["پیش‌نمایش سیک","ترک‌های تصویر بندانگشتی WebVTT — تصویر تکی یا اسپرایت‌شیت #xywh."],
+      ["لیست پخش و فصل‌ها","پنل قسمت‌ها با سرفصل‌های چسبان فصل، قبلی/بعدی و پخش خودکار قسمت بعد."],
+      ["کارت «قسمت بعد»","نزدیک پایان قسمت، کارتی با کاور و نوار پیشرفت برای پرش به قسمت بعد (یا ادامهٔ خودکار)."],
+      ["تبلیغات","پیش‌رول، میان‌رول (در ثانیهٔ دلخواه) و پس‌رول، با شمارش معکوس رد کردن و کلیک‌ثرو."],
+      ["ژست‌های لمسی","دبل‌تپ ±۱۰ ثانیه، نگه‌داشتن برای ۲×، سوایپ روشنایی/صدا؛ در دسکتاپ کلیک برای توقف و نمایش با هاور."],
+      ["تمام‌صفحه","تمام‌صفحهٔ مبتنی بر روت با چرخش خودکار افقی و حالت immersive در موبایل."],
+      ["اورلی‌ها","دکمهٔ لایک، نشان اطلاعات، بنر اطلاعیهٔ اپراتور و اورلی مسدودسازی شبکه/IP."],
+      ["پرووایدرهای VOD","تبادل توکن پخش با URL واقعی استریم از طریق API پرووایدر (ABR همراهی، پویان)."],
+      ["آنالیتیکس داخلی","رویدادهای استاندارد پخش/توقف/سیک/بافر/هارت‌بیت به اندپوینت شما — کاملاً اختیاری."],
+      ["ادامهٔ تماشا","بنر «ادامهٔ تماشا» — از آنالیتیکس یا بک‌اند خودتان با resolveResume."],
+      ["ترکر خارجی","گزارش دوره‌ای «تماشای کاربر» به بک‌اند فعلی خودتان با onWatchInterval."],
+      ["ماندگاری و دوزبانه","به‌خاطرسپاری صدا/سرعت/روشنایی؛ فارسی و انگلیسی از ابتدا، با ارقام فارسی و متن‌های قابل‌بازنویسی."]
+    ],
+    "playlist.title":"قسمت‌ها، فصل‌ها و «قسمت بعد»",
+    "playlist.intro":"فهرستی از قسمت‌ها بدهید تا پنل لیست پخش و ناوبری قبلی/بعدی خودکار ظاهر شود. Episode.group سرفصل‌های چسبان فصل را می‌سازد و نزدیک پایان هر قسمت، کارت «قسمت بعد» (کاور + نوار پیشرفت) قسمت بعدی را پیشنهاد می‌دهد — یا خودکار ادامه می‌دهد.",
+    "ads.title":"تبلیغات",
+    "ads.intro":"پیش‌رول، میان‌رول (در موقعیت دلخواه محتوا) و پس‌رول، با شمارش معکوس رد کردن و کلیک‌ثرو. پلیر پخش تبلیغ را مدیریت می‌کند و بعدش محتوا را ادامه می‌دهد؛ پخش تبلیغ هرگز در آنالیتیکس محتوا حساب نمی‌شود.",
+    "analytics.title":"آنالیتیکس و ادامهٔ تماشا (اختیاری)",
+    "analytics.intro":"آنالیتیکس کاملاً اختیاری است — پلیر بدون آن هم کامل کار می‌کند. با دادن یک کانفیگ، رویدادهای استاندارد پخش به اندپوینت شما ارسال می‌شود (دسته‌ای، با تلاش مجدد و هارت‌بیت) و بنر «ادامهٔ تماشا» از آخرین موقعیت ذخیره‌شده نمایش داده می‌شود.",
+    "backend.title":"بک‌اند خودتان",
+    "backend.intro":"نیازی به بک‌اند Logplex نیست: توکن پخش را از طریق پرووایدر VOD تبادل کنید، هارت‌بیت تماشا را به ترکر خودتان گزارش دهید و بنر ادامهٔ تماشا را از API خودتان پر کنید.",
+    "theming.title":"تم و بومی‌سازی",
+    "theming.intro":"تم از طریق توکن‌های طراحی، جابه‌جایی بین تیره و روشن، و تغییر زبان با locale. حالت RTL فقط متن را راست‌چین می‌کند — کنترل‌ها، جهت سیک و ژست‌ها فیزیکی می‌مانند، مثل یوتیوب.",
+    "api.title":"مرور API",
+    "api.intro":"مهم‌ترین پارامترهای PlayoraPlayer. همه‌چیز اختیاری است جز منبع (src / sources / episodes).",
+    "api.hProp":"پارامتر","api.hType":"نوع","api.hDesc":"توضیح",
+    api:[
+      ["src / sources","String / List<VideoSource>","آدرس HLS/MP4، یا نسخه‌های MP4 برای منوی کیفیت دستی. برای vodType غیر استاندارد، توکن پخش."],
+      ["vodType / vodCustomUrl","VodProvider / Map","تبادل توکن با پرووایدر (ABR همراهی، پویان)؛ {token} در اندپوینت جایگزین می‌شود."],
+      ["qualityValidate","bool Function(int height)","نسخه‌هایی که ارتفاعشان رد شود پنهان می‌شوند. گزینهٔ خودکار می‌ماند."],
+      ["poster / title / episodeLabel","String","تصویر کاور و عنوان‌های بالای نوار پیشرفت."],
+      ["thumbnails","String","ترک WebVTT بندانگشتی‌ها برای پیش‌نمایش سیک."],
+      ["subtitles","List<ExternalSubtitle>","زیرنویس‌های خارجی (ترک‌های داخلی خودکار شناسایی می‌شوند)."],
+      ["locale / textDirection","PlayerLocale / TextDirection?","زبان و جهت رابط. fa ← راست‌چین."],
+      ["theme / appearance","PlayoraTheme / PlayerAppearance","بازنویسی توکن‌های طراحی و طرح رنگ تیره/روشن."],
+      ["episodes / currentEpisodeId / onEpisodeChange","—","لیست پخش کنترل‌شده؛ Episode.group سرفصل فصل و کارت «قسمت بعد» را فعال می‌کند."],
+      ["ad / ads","AdConfig / List<AdBreak>","میان‌بر پیش‌رول، یا وقفه‌ها در pre/post/AdOffset.at(...)."],
+      ["notice / restriction / badge","—","اطلاعیهٔ اپراتور، اورلی مسدودسازی، نشان موقت اطلاعات."],
+      ["analytics / resume / resolveResume","—","آنالیتیکس داخلی، بنر ادامهٔ تماشا، ادامهٔ تماشای سمت میزبان."],
+      ["onWatchInterval / watchInterval","—","هارت‌بیت تماشای خارجی + بازهٔ آن (پیش‌فرض ۵ ثانیه)."],
+      ["onPlayerReady","ValueChanged<PlayoraController?>","کنترل دستوری — سیک، توقف، ترک‌ها و …"],
+      ["persistSettings / settingsKey","bool / String","به‌خاطرسپاری صدا/بی‌صدا/سرعت/روشنایی بین نشست‌ها."],
+      ["fullscreenOnPlay / onBack / onLike / liked / loading","—","کلیدهای رفتار و هوک‌های میزبان."],
+      ["overlayBuilder","List<Widget> Function(BuildContext)","اورلی‌های اضافه داخل سطح پلیر."]
+    ],
+    "plat.title":"پلتفرم‌ها",
+    "plat.intro":"هر جا فلاتر اجرا شود، اجرا می‌شود — نسخهٔ وب زیر پوسته از hls.js (از طریق media_kit) استفاده می‌کند.",
+    "footer":"playora · ساخته‌شده روی media_kit + hls.js · توسعه‌دهنده: علی رودی · MIT"
+  }
+};
+
+function render(lang){
+  const t = C[lang];
+  document.documentElement.lang = lang;
+  document.documentElement.dir = t.dir;
+  document.querySelectorAll("[data-t]").forEach(el => {
+    const v = t[el.getAttribute("data-t")];
+    if (v) el.textContent = v;
+  });
+  document.getElementById("langBtn").textContent = t.langBtn;
+  document.getElementById("pills").innerHTML =
+    t.pills.map(p => `<span class="dx-pill">${p}</span>`).join("");
+  document.getElementById("featGrid").innerHTML =
+    t.features.map(([h,d]) => `<div class="card"><h3>${h}</h3><p>${d}</p></div>`).join("");
+  const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  document.getElementById("apiRows").innerHTML =
+    t.api.map(([p,ty,d]) => `<tr><td><code>${esc(p)}</code></td><td><code>${esc(ty)}</code></td><td class="desc">${esc(d)}</td></tr>`).join("");
+  try { localStorage.setItem("playora-docs-lang", lang); } catch(e){}
+}
+
+let lang = "en";
+try { lang = localStorage.getItem("playora-docs-lang") || "en"; } catch(e){}
+if (!C[lang]) lang = "en";
+render(lang);
+
+document.getElementById("langBtn").addEventListener("click", () => {
+  lang = lang === "en" ? "fa" : "en";
+  render(lang);
+});
+
+document.querySelectorAll("pre").forEach(pre => {
+  const btn = document.createElement("button");
+  btn.className = "copy";
+  btn.textContent = "copy";
+  btn.addEventListener("click", () => {
+    navigator.clipboard.writeText(pre.querySelector("code").innerText).then(() => {
+      btn.textContent = "✓";
+      setTimeout(() => btn.textContent = "copy", 1200);
+    });
+  });
+  pre.appendChild(btn);
+});
+</script>
+</body>
+</html>

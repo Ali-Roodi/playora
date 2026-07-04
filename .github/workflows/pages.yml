@@ -35,11 +35,18 @@ jobs:
         working-directory: example
         run: |
           flutter pub get
-          flutter build web --release --base-href "/playora/"
+          flutter build web --release --base-href "/playora/demo/"
+
+      # Landing page at the root, the Flutter demo under /demo/.
+      - name: Assemble site
+        run: |
+          mkdir -p _site/demo
+          cp -r site/. _site/
+          cp -r example/build/web/. _site/demo/
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: example/build/web
+          path: _site
 
   deploy:
     needs: build
