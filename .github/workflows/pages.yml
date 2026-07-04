@@ -20,10 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable GitHub Pages
+      # The Pages site already exists (source: GitHub Actions); this step only
+      # syncs config and must never block a deploy.
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
+        continue-on-error: true
 
       - uses: subosito/flutter-action@v2
         with:
