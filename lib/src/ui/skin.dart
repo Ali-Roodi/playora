@@ -457,30 +457,41 @@ class _PlayerSkinState extends State<PlayerSkin> {
     final subtitleOptions = controller.subtitleOptions;
     final subtitlesOn = controller.subtitlesOn;
 
+    // The gradient scrim must not absorb taps: empty areas fall through to
+    // the GestureLayer beneath, so tapping the video again re-hides the
+    // controls. Buttons/sliders still hit-test normally.
     return MouseRegion(
+      hitTestBehavior: HitTestBehavior.translucent,
       onHover: (_) => _ping(),
-      child: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0x99000000),
-              Color(0x00000000),
-              Color(0x00000000),
-              Color(0xCC000000),
-            ],
-            stops: [0, 0.25, 0.6, 1],
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x99000000),
+                    Color(0x00000000),
+                    Color(0x00000000),
+                    Color(0xCC000000),
+                  ],
+                  stops: [0, 0.25, 0.6, 1],
+                ),
+              ),
+            ),
           ),
-        ),
-        child: Column(
-          children: [
-            _topBar(state, audioOptions, subtitleOptions, subtitlesOn),
-            const Spacer(),
-            if (widget.resume != null) _resumeCard(),
-            _bottomBar(state, isMuted),
-          ],
-        ),
+          Column(
+            children: [
+              _topBar(state, audioOptions, subtitleOptions, subtitlesOn),
+              const Spacer(),
+              if (widget.resume != null) _resumeCard(),
+              _bottomBar(state, isMuted),
+            ],
+          ),
+        ],
       ),
     );
   }
