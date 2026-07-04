@@ -18,7 +18,7 @@ import 'widgets/control_button.dart';
 import 'widgets/player_modal.dart';
 import 'widgets/time_slider.dart';
 
-const Duration _idleHide = Duration(seconds: 4);
+const Duration _idleHide = Duration(seconds: 8);
 const List<double> _speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 /// The custom skin: cover, gesture surface, top/bottom control bars, quality/
