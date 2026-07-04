@@ -56,6 +56,8 @@ class PlayoraPlayer extends StatefulWidget {
     this.theme,
     this.appearance = PlayerAppearance.dark,
     this.aspectRatio = 16 / 9,
+    this.expand = false,
+    this.videoFit = BoxFit.contain,
     this.episodes,
     this.currentEpisodeId,
     this.onEpisodeChange,
@@ -132,6 +134,14 @@ class PlayoraPlayer extends StatefulWidget {
 
   /// Aspect ratio of the inline player box.
   final double aspectRatio;
+
+  /// Fill the parent instead of sizing to [aspectRatio] — for hosts that give
+  /// the player a fixed box (e.g. a full-height portrait page). The video
+  /// letterboxes inside per [videoFit]; the control bars pin to the box edges.
+  final bool expand;
+
+  /// How the video scales inside the surface (fullscreen included).
+  final BoxFit videoFit;
 
   /// Playlist; enables the panel + prev/next. [Episode.group] adds season
   /// headers; an up-next card appears near the end.
@@ -244,6 +254,11 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   String? _episodeId;
   bool _wasPlaying = false;
   bool _forcePlayNext = false;
+
+  /// A src-less episode was selected; the host is resolving the stream and
+  /// will swap `widget.src`.
+  bool _awaitingHostSource = false;
+  bool _pendingEpisodePlay = false;
 
   // Analytics.
   LogplexAnalyticsClient? _analyticsClient;
@@ -387,10 +402,33 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       _forcePlayNext = false;
       _episodeId = _episode?.id;
       _setupAnalytics();
-      _loadContent(play: play, startAt: Duration.zero);
+      final episode = _episode;
+      if (episode != null &&
+          episode.src == null &&
+          episode.sources == null &&
+          !sourceChanged) {
+        // Host-resolved episode: pause on a spinner until the host swaps
+        // `src` (see [Episode.src]). (When the host swaps id + src in one
+        // rebuild, sourceChanged is true and we load right away below.)
+        _awaitingHostSource = true;
+        _pendingEpisodePlay = play;
+        _controller.pause();
+        setState(() => _vodLoading = true);
+      } else {
+        _awaitingHostSource = false;
+        _loadContent(play: play, startAt: Duration.zero);
+      }
     } else if (sourceChanged) {
-      _setupAnalytics();
-      _loadContent(play: _wasPlaying, startAt: Duration.zero);
+      if (_awaitingHostSource) {
+        // The host delivered the stream for the episode selected above —
+        // analytics identity was already re-keyed there.
+        _awaitingHostSource = false;
+        setState(() => _vodLoading = false);
+        _loadContent(play: _pendingEpisodePlay, startAt: Duration.zero);
+      } else {
+        _setupAnalytics();
+        _loadContent(play: _wasPlaying, startAt: Duration.zero);
+      }
     } else if (_analyticsConfigIdentityChanged(old.analytics, widget.analytics)) {
       _setupAnalytics();
     }
@@ -772,11 +810,13 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   Widget build(BuildContext context) {
     if (_isFullscreen) {
       // The fullscreen route hosts the surface; keep the inline box black.
+      if (widget.expand) return const ColoredBox(color: Colors.black);
       return AspectRatio(
         aspectRatio: widget.aspectRatio,
         child: const ColoredBox(color: Colors.black),
       );
     }
+    if (widget.expand) return buildSurface(context, fullscreen: false);
     return AspectRatio(
       aspectRatio: widget.aspectRatio,
       child: buildSurface(context, fullscreen: false),
@@ -802,6 +842,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
           mkv.Video(
             controller: _controller.videoController,
             controls: mkv.NoVideoControls,
+            fit: widget.videoFit,
             fill: Colors.black,
             subtitleViewConfiguration:
                 const mkv.SubtitleViewConfiguration(visible: false),

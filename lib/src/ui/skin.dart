@@ -619,21 +619,23 @@ class _PlayerSkinState extends State<PlayerSkin> {
               style: TextStyle(color: theme.textMuted, fontSize: 12.5),
             ),
             const SizedBox(height: 10),
-            FilledButton(
-              onPressed: () {
-                controller.seek(resume.position);
-                controller.play();
-                widget.onDismissResume?.call();
-              },
-              style: FilledButton.styleFrom(
-                backgroundColor: theme.accent,
-                foregroundColor: theme.accentContrast,
-              ),
-              child: Text(
-                '${strings.resumeCta} ${localeDigits(widget.locale, minute)}',
-                textDirection: widget.textDirection,
-                style:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            Center(
+              child: FilledButton(
+                onPressed: () {
+                  controller.seek(resume.position);
+                  controller.play();
+                  widget.onDismissResume?.call();
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: theme.accent,
+                  foregroundColor: theme.accentContrast,
+                ),
+                child: Text(
+                  '${strings.resumeCta} ${localeDigits(widget.locale, minute)}',
+                  textDirection: widget.textDirection,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700),
+                ),
               ),
             ),
           ],

@@ -58,11 +58,14 @@ class Episode {
     this.duration,
     this.group,
     this.contentId,
-  }) : assert(src != null || sources != null, 'Episode needs src or sources');
+  });
 
   final String id;
 
-  /// HLS .m3u8 or a progressive MP4 URL.
+  /// HLS .m3u8 or a progressive MP4 URL. Leave [src] AND [sources] null for a
+  /// host-resolved episode: when it's selected the player parks on a spinner
+  /// and waits for the host to swap `PlayoraPlayer.src` (fetch the stream URL
+  /// or token in `onEpisodeChange`, then rebuild with the new `src`).
   final String? src;
 
   /// MP4 renditions for a manual quality menu (alternative to [src]).

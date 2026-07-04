@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+- `expand`: fill the parent box instead of sizing to `aspectRatio` — for
+  full-height portrait player pages; control bars pin to the box edges.
+- `videoFit`: control how the video scales inside the surface (default
+  `BoxFit.contain`, now passed explicitly to the render layer).
+- Host-resolved episodes: an `Episode` may omit `src`/`sources`; selecting it
+  parks the player on a spinner until the host swaps `PlayoraPlayer.src`
+  (per-episode token/URL exchange in `onEpisodeChange`).
+- Resume card: the CTA button is centered.
+
 ## 0.1.1
 
 - `orientationsAfterFullscreen`: orientations restored when leaving fullscreen
