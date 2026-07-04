@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+- Fix: a playlist handed to the player after mount (hosts fetching episodes
+  async) was treated as an episode switch — with src-less episodes the player
+  paused on an infinite spinner. It is now adopted in place.
+- Fix: seeks issued before the media reports a duration (e.g. tapping the
+  resume banner right after open) were silently dropped by mpv and playback
+  restarted at 0. They are now parked and applied once the duration is known.
+- Re-selecting the episode whose media is already loaded (a host revert after
+  a failed resolve) cancels the wait instead of reloading.
+
 ## 0.2.0
 
 - `expand`: fill the parent box instead of sizing to `aspectRatio` — for

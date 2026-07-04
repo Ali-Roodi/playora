@@ -260,6 +260,11 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   bool _awaitingHostSource = false;
   bool _pendingEpisodePlay = false;
 
+  /// The episode the currently-loaded media belongs to (null for a plain
+  /// src). Lets an episode re-selection that maps to the already-loaded
+  /// media (a host revert) skip the reload.
+  String? _loadedEpisodeId;
+
   // Analytics.
   LogplexAnalyticsClient? _analyticsClient;
   PlayerAnalyticsTracker? _tracker;
@@ -395,26 +400,43 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
         !listEquals(old.sources, widget.sources) ||
         old.vodType != widget.vodType;
 
-    if (episodeChanged) {
+    if (episodeChanged && _episodeId == null && !sourceChanged) {
+      // The playlist arrived after mount for the content that is already
+      // playing (hosts often fetch it async) — adopt it, don't reload.
+      _episodeId = _episode?.id;
+      _loadedEpisodeId ??= _episodeId;
+    } else if (episodeChanged && _episode == null) {
+      // Playlist removed — keep playing the current source.
+      _episodeId = null;
+    } else if (episodeChanged) {
       // Resume playback automatically if it was already playing (so the new
       // episode plays without a separate tap). Auto-advance forces play.
-      final play = _wasPlaying || _forcePlayNext;
+      final play = _wasPlaying || _forcePlayNext || _pendingEpisodePlay;
       _forcePlayNext = false;
       _episodeId = _episode?.id;
-      _setupAnalytics();
       final episode = _episode;
-      if (episode != null &&
+      if (episode?.id == _loadedEpisodeId && !sourceChanged) {
+        // Back to the episode whose media is already loaded — e.g. the host
+        // couldn't resolve the previously selected one and reverted. Cancel
+        // the wait and keep going.
+        _awaitingHostSource = false;
+        _pendingEpisodePlay = false;
+        if (_vodLoading) setState(() => _vodLoading = false);
+        if (play) _controller.play();
+      } else if (episode != null &&
           episode.src == null &&
           episode.sources == null &&
           !sourceChanged) {
         // Host-resolved episode: pause on a spinner until the host swaps
         // `src` (see [Episode.src]). (When the host swaps id + src in one
         // rebuild, sourceChanged is true and we load right away below.)
+        _setupAnalytics();
         _awaitingHostSource = true;
         _pendingEpisodePlay = play;
         _controller.pause();
         setState(() => _vodLoading = true);
       } else {
+        _setupAnalytics();
         _awaitingHostSource = false;
         _loadContent(play: play, startAt: Duration.zero);
       }
@@ -423,8 +445,10 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
         // The host delivered the stream for the episode selected above —
         // analytics identity was already re-keyed there.
         _awaitingHostSource = false;
+        final play = _pendingEpisodePlay;
+        _pendingEpisodePlay = false;
         setState(() => _vodLoading = false);
-        _loadContent(play: _pendingEpisodePlay, startAt: Duration.zero);
+        _loadContent(play: play, startAt: Duration.zero);
       } else {
         _setupAnalytics();
         _loadContent(play: _wasPlaying, startAt: Duration.zero);
@@ -578,6 +602,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
         play: play,
         startAt: startAt,
       );
+      _loadedEpisodeId = _episodeId;
       _fetchThumbnails(generation);
       return;
     }
@@ -612,6 +637,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       play: play,
       startAt: startAt,
     );
+    _loadedEpisodeId = _episodeId;
     _fetchThumbnails(generation);
   }
 

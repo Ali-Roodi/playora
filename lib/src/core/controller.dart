@@ -233,6 +233,10 @@ class PlayoraController {
   double _volumeBeforeMute = 1.0;
   bool _disposed = false;
 
+  /// A seek issued before the media reported a duration — mpv silently drops
+  /// those, so it's parked here and applied when the duration arrives.
+  Duration? _pendingSeek;
+
   /// Manual MP4 renditions of the current source, if it was opened as a list.
   List<VideoSource>? get renditions => _renditions;
 
@@ -255,7 +259,16 @@ class PlayoraController {
       s.position.listen((p) => position.value = p),
       s.duration.listen((d) {
         duration.value = d;
-        if (d > Duration.zero) _update((v) => v.copyWith(canPlay: true));
+        if (d > Duration.zero) {
+          _update((v) => v.copyWith(canPlay: true));
+          final pending = _pendingSeek;
+          if (pending != null) {
+            _pendingSeek = null;
+            final clamped = pending > d ? d : pending;
+            position.value = clamped;
+            player.seek(clamped);
+          }
+        }
       }),
       s.buffer.listen((b) => buffer.value = b),
       s.volume.listen((vol) {
@@ -302,6 +315,7 @@ class PlayoraController {
     int renditionIndex = 0,
   }) async {
     assert(url != null || (renditions?.isNotEmpty ?? false));
+    _pendingSeek = null; // a parked seek belongs to the previous source
     _renditions = renditions;
     _externalSubtitles = externalSubtitles;
     final target = url ?? renditions![renditionIndex].src;
@@ -338,6 +352,13 @@ class PlayoraController {
     var clamped = to < Duration.zero ? Duration.zero : to;
     if (d > Duration.zero && clamped > d) clamped = d;
     position.value = clamped; // optimistic, keeps the scrubber snappy
+    if (d == Duration.zero) {
+      // Not ready yet (e.g. the resume banner tapped right after open) —
+      // park the seek; the duration listener applies it once known.
+      _pendingSeek = clamped;
+      _seeks.add(SeekEvent(from, clamped));
+      return;
+    }
     await player.seek(clamped);
     _seeks.add(SeekEvent(from, clamped));
   }
