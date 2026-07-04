@@ -239,11 +239,13 @@ class _PlayerSkinState extends State<PlayerSkin> {
             ),
           ),
           Align(
-            alignment: const Alignment(0, 0.82),
-            child: _pillButton(
-              icon: Icons.lock,
-              label: strings.unlock,
-              onTap: () => setState(() => _locked = false),
+            alignment: Alignment.topLeft,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: _pillButton(
+                icon: Icons.lock,
+                onTap: () => setState(() => _locked = false),
+              ),
             ),
           ),
           ...widget.extraOverlays,
@@ -374,7 +376,7 @@ class _PlayerSkinState extends State<PlayerSkin> {
 
   Widget _pillButton({
     required IconData icon,
-    required String label,
+    String? label,
     required VoidCallback onTap,
   }) {
     return Material(
@@ -384,7 +386,8 @@ class _PlayerSkinState extends State<PlayerSkin> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(999),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          padding: EdgeInsets.symmetric(
+              horizontal: label != null ? 16 : 10, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(999),
             border: Border.all(color: theme.border),
@@ -393,12 +396,14 @@ class _PlayerSkinState extends State<PlayerSkin> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(icon, color: theme.text, size: 18),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                textDirection: widget.textDirection,
-                style: TextStyle(color: theme.text, fontSize: 13),
-              ),
+              if (label != null) ...[
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  textDirection: widget.textDirection,
+                  style: TextStyle(color: theme.text, fontSize: 13),
+                ),
+              ],
             ],
           ),
         ),
@@ -651,42 +656,44 @@ class _PlayerSkinState extends State<PlayerSkin> {
                   ),
                 ),
               ),
-              const Spacer(),
               if (widget.title != null || widget.episodeLabel != null)
-                Flexible(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (widget.title != null)
-                        Text(
-                          widget.title!,
-                          textDirection: widget.textDirection,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: theme.text,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            shadows: const [
-                              Shadow(color: Colors.black54, blurRadius: 4),
-                            ],
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsetsDirectional.only(start: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (widget.title != null)
+                          Text(
+                            widget.title!,
+                            textDirection: widget.textDirection,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: theme.text,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              shadows: const [
+                                Shadow(color: Colors.black54, blurRadius: 4),
+                              ],
+                            ),
                           ),
-                        ),
-                      if (widget.episodeLabel != null)
-                        Text(
-                          widget.episodeLabel!,
-                          textDirection: widget.textDirection,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: theme.textMuted,
-                            fontSize: 11.5,
-                            shadows: const [
-                              Shadow(color: Colors.black54, blurRadius: 4),
-                            ],
+                        if (widget.episodeLabel != null)
+                          Text(
+                            widget.episodeLabel!,
+                            textDirection: widget.textDirection,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: theme.textMuted,
+                              fontSize: 11.5,
+                              shadows: const [
+                                Shadow(color: Colors.black54, blurRadius: 4),
+                              ],
+                            ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
             ],
@@ -700,84 +707,95 @@ class _PlayerSkinState extends State<PlayerSkin> {
             thumbnails: widget.thumbnails,
             onInteraction: _ping,
           ),
-          Row(
-            children: [
-              // Left: lock + speed.
-              ControlButton(
-                theme: theme,
-                tooltip: strings.lock,
-                icon: Icons.lock_outline,
-                onPressed: () => setState(() {
-                  _locked = true;
-                  _active = false;
-                }),
-              ),
-              LabelButton(
-                theme: theme,
-                label:
-                    '${state.rate == state.rate.roundToDouble() ? state.rate.toInt() : state.rate}X',
-                tooltip: strings.speed,
-                onPressed: () => _openPanel(() => _speedOpen = true),
-              ),
-              const Spacer(),
-              // Center transport.
-              if (_hasPlaylist)
+          LayoutBuilder(builder: (context, constraints) {
+            // Narrow (portrait) widths: shed the least essential transport
+            // buttons instead of overflowing — prev/next stay reachable from
+            // the playlist panel, ±10s via double-tap gestures.
+            final w = constraints.maxWidth;
+            final showPrevNext = _hasPlaylist && w >= 480;
+            final showSeekButtons = w >= 380;
+            return Row(
+              children: [
+                // Left: lock + speed.
                 ControlButton(
                   theme: theme,
-                  tooltip: strings.prevEpisode,
-                  icon: Icons.skip_previous,
-                  onPressed: widget.hasPrev ? widget.onPrev : null,
+                  tooltip: strings.lock,
+                  icon: Icons.lock_outline,
+                  onPressed: () => setState(() {
+                    _locked = true;
+                    _active = false;
+                  }),
                 ),
-              ControlButton(
-                theme: theme,
-                tooltip: strings.rewind10,
-                icon: Icons.replay_10,
-                onPressed: () =>
-                    controller.seekBy(const Duration(seconds: -10)),
-              ),
-              ControlButton(
-                theme: theme,
-                tooltip: state.playing ? strings.pause : strings.play,
-                icon: state.playing ? Icons.pause : Icons.play_arrow,
-                size: 56,
-                iconSize: 38,
-                onPressed: controller.togglePlay,
-              ),
-              ControlButton(
-                theme: theme,
-                tooltip: strings.forward10,
-                icon: Icons.forward_10,
-                onPressed: () => controller.seekBy(const Duration(seconds: 10)),
-              ),
-              if (_hasPlaylist)
+                LabelButton(
+                  theme: theme,
+                  label:
+                      '${state.rate == state.rate.roundToDouble() ? state.rate.toInt() : state.rate}X',
+                  tooltip: strings.speed,
+                  onPressed: () => _openPanel(() => _speedOpen = true),
+                ),
+                const Spacer(),
+                // Center transport.
+                if (showPrevNext)
+                  ControlButton(
+                    theme: theme,
+                    tooltip: strings.prevEpisode,
+                    icon: Icons.skip_previous,
+                    onPressed: widget.hasPrev ? widget.onPrev : null,
+                  ),
+                if (showSeekButtons)
+                  ControlButton(
+                    theme: theme,
+                    tooltip: strings.rewind10,
+                    icon: Icons.replay_10,
+                    onPressed: () =>
+                        controller.seekBy(const Duration(seconds: -10)),
+                  ),
                 ControlButton(
                   theme: theme,
-                  tooltip: strings.nextEpisode,
-                  icon: Icons.skip_next,
-                  onPressed: widget.hasNext ? widget.onNext : null,
+                  tooltip: state.playing ? strings.pause : strings.play,
+                  icon: state.playing ? Icons.pause : Icons.play_arrow,
+                  size: 56,
+                  iconSize: 38,
+                  onPressed: controller.togglePlay,
                 ),
-              const Spacer(),
-              // Right: fullscreen + volume.
-              ControlButton(
-                theme: theme,
-                tooltip: widget.isFullscreen
-                    ? strings.fullscreenExit
-                    : strings.fullscreenEnter,
-                icon: widget.isFullscreen
-                    ? Icons.fullscreen_exit
-                    : Icons.fullscreen,
-                onPressed: widget.onToggleFullscreen,
-              ),
-              _VolumeControl(
-                theme: theme,
-                strings: strings,
-                isMuted: isMuted,
-                volume: state.volume,
-                onToggleMute: controller.toggleMute,
-                onVolume: controller.setVolume,
-              ),
-            ],
-          ),
+                if (showSeekButtons)
+                  ControlButton(
+                    theme: theme,
+                    tooltip: strings.forward10,
+                    icon: Icons.forward_10,
+                    onPressed: () =>
+                        controller.seekBy(const Duration(seconds: 10)),
+                  ),
+                if (showPrevNext)
+                  ControlButton(
+                    theme: theme,
+                    tooltip: strings.nextEpisode,
+                    icon: Icons.skip_next,
+                    onPressed: widget.hasNext ? widget.onNext : null,
+                  ),
+                const Spacer(),
+                // Right: fullscreen + volume.
+                ControlButton(
+                  theme: theme,
+                  tooltip: widget.isFullscreen
+                      ? strings.fullscreenExit
+                      : strings.fullscreenEnter,
+                  icon: widget.isFullscreen
+                      ? Icons.fullscreen_exit
+                      : Icons.fullscreen,
+                  onPressed: widget.onToggleFullscreen,
+                ),
+                _VolumeControl(
+                  theme: theme,
+                  strings: strings,
+                  isMuted: isMuted,
+                  volume: state.volume,
+                  onToggleMute: controller.toggleMute,
+                  onVolume: controller.setVolume,
+                ),
+              ],
+            );
+          }),
         ],
       ),
     );
@@ -810,7 +828,10 @@ class _PlayerSkinState extends State<PlayerSkin> {
                 ? isAuto
                 : option.renditionIndex != null
                     ? option.renditionIndex == state.renditionIndex
-                    : !isAuto && option.track?.id == current.id,
+                    : option.hlsLevelIndex != null
+                        ? !isAuto &&
+                            option.hlsLevelIndex == controller.activeHlsLevel
+                        : !isAuto && option.track?.id == current.id,
             onSelect: () {
               controller.selectQuality(option);
               _openPanel(() => _settingsOpen = false);

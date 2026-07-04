@@ -53,7 +53,7 @@ List<Episode> _episodesFor(PlayerLocale locale) {
       poster: 'https://picsum.photos/seed/lp3/1280/720',
       title: title,
       subtitle: episode(3),
-      group: season(2),
+      group: season(1),
     ),
   ];
 }

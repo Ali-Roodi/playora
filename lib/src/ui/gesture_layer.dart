@@ -158,7 +158,9 @@ class GestureLayerState extends State<GestureLayer> {
       _axis = delta.dy.abs() > delta.dx.abs() ? _Axis.vertical : _Axis.horizontal;
       _longPress?.cancel();
     }
-    if (_touch && _axis == _Axis.vertical && !_rate2x && _surface.height > 0) {
+    // Vertical drag — brightness (left half) / volume (right half). Works for
+    // touch and mouse alike; 2× long-press stays touch-only.
+    if (_axis == _Axis.vertical && !_rate2x && _surface.height > 0) {
       final frac = -delta.dy / _surface.height; // up increases
       if (_leftHalf) {
         final b = (_startBrightness + frac).clamp(0.2, 1.0);

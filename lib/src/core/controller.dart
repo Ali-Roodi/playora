@@ -5,6 +5,8 @@ import 'package:media_kit/media_kit.dart' as mk;
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
 import '../models/types.dart';
+import 'hls_compat_stub.dart'
+    if (dart.library.js_interop) 'hls_compat_web.dart';
 
 /// A selectable quality option — either "Auto" (adaptive), an embedded (HLS)
 /// video track, or one of the manual MP4 renditions.
@@ -15,26 +17,39 @@ class QualityOption {
         height = null,
         label = 'AUTO',
         track = null,
-        renditionIndex = null;
+        renditionIndex = null,
+        hlsLevelIndex = null;
 
   QualityOption.track(mk.VideoTrack this.track)
       : isAuto = false,
         height = track.h,
         label = track.h != null ? '${track.h}p' : (track.title ?? track.id),
-        renditionIndex = null;
+        renditionIndex = null,
+        hlsLevelIndex = null;
 
   const QualityOption.rendition({
     required this.label,
     required int this.renditionIndex,
     this.height,
   })  : isAuto = false,
-        track = null;
+        track = null,
+        hlsLevelIndex = null;
+
+  /// A quality level of the hls.js instance (web HLS playback only).
+  const QualityOption.hlsLevel({
+    required this.label,
+    required int this.hlsLevelIndex,
+    this.height,
+  })  : isAuto = false,
+        track = null,
+        renditionIndex = null;
 
   final bool isAuto;
   final int? height;
   final String label;
   final mk.VideoTrack? track;
   final int? renditionIndex;
+  final int? hlsLevelIndex;
 }
 
 /// A selectable audio track (embedded in the stream).
@@ -177,6 +192,8 @@ class PlayoraController {
           configuration: configuration ??
               const mk.PlayerConfiguration(title: 'playora'),
         ) {
+    // Must run before the first open(); media_kit consults canPlayType there.
+    ensureWebHlsPlayable();
     videoController = mkv.VideoController(player);
     _bind();
   }
@@ -367,6 +384,24 @@ class PlayoraController {
           ),
       ];
     }
+    // Web HLS: mpv track lists stay empty; read the hls.js levels instead.
+    final webLevels = webHlsLevels();
+    if (webLevels.isNotEmpty) {
+      final withHeights = webLevels.where((l) => l.height != null).toList()
+        ..sort((a, b) => b.height!.compareTo(a.height!));
+      final seenHeights = <int>{};
+      return [
+        for (final level in withHeights)
+          if (seenHeights.add(level.height!) &&
+              (validate == null || validate(level.height!)))
+            QualityOption.hlsLevel(
+              label: '${level.height}p',
+              hlsLevelIndex: level.index,
+              height: level.height,
+            ),
+        const QualityOption.auto(),
+      ];
+    }
     final tracks = state.value.tracks.video
         .where((t) => t.id != 'auto' && t.id != 'no' && t.image != true)
         .where((t) => t.h != null)
@@ -386,8 +421,14 @@ class PlayoraController {
   }
 
   /// Whether adaptive ("Auto") selection is active (embedded sources only).
-  bool get isAutoQuality =>
-      _renditions == null && state.value.selected.video.id == 'auto';
+  bool get isAutoQuality {
+    if (_renditions != null) return false;
+    if (webHlsLevels().isNotEmpty) return webHlsAutoEnabled();
+    return state.value.selected.video.id == 'auto';
+  }
+
+  /// Index of the hls.js level currently playing (web only, -1 otherwise).
+  int get activeHlsLevel => webHlsCurrentLevel();
 
   /// Label for the quality button — the manual rendition's label, the selected
   /// track's height, or AUTO.
@@ -396,6 +437,16 @@ class PlayoraController {
     if (renditions != null) {
       final i = state.value.renditionIndex.clamp(0, renditions.length - 1);
       return renditions[i].qualityLabel;
+    }
+    final webLevels = webHlsLevels();
+    if (webLevels.isNotEmpty) {
+      if (webHlsAutoEnabled()) return 'AUTO';
+      final current = webHlsCurrentLevel();
+      final height = webLevels
+          .where((l) => l.index == current)
+          .map((l) => l.height)
+          .firstOrNull;
+      return height != null ? '${height}p' : 'AUTO';
     }
     final v = state.value.selected.video;
     if (v.id == 'auto' || v.id == 'no') return 'AUTO';
@@ -423,7 +474,19 @@ class PlayoraController {
       if (active != null) await selectExternalSubtitle(active);
       return;
     }
+    if (option.hlsLevelIndex != null) {
+      setWebHlsLevel(option.hlsLevelIndex!);
+      // Labels derive from hls.js state — emit a fresh value so the UI
+      // rebuilds (PlaybackValue has identity equality).
+      _update((v) => v.copyWith());
+      return;
+    }
     if (option.isAuto) {
+      if (webHlsLevels().isNotEmpty) {
+        setWebHlsLevel(-1);
+        _update((v) => v.copyWith());
+        return;
+      }
       await player.setVideoTrack(mk.VideoTrack.auto());
       return;
     }
