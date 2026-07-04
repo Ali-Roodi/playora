@@ -61,11 +61,25 @@ List<Episode> _episodesFor(PlayerLocale locale) {
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  runApp(const DemoApp());
+  // `?embed=1` (used by the docs landing page) renders just the player,
+  // sized to the viewport — no header/controls, nothing to scroll.
+  final params = Uri.base.queryParameters;
+  runApp(DemoApp(
+    embed: params['embed'] == '1',
+    initialLocale:
+        params['lang'] == 'en' ? PlayerLocale.en : PlayerLocale.fa,
+  ));
 }
 
 class DemoApp extends StatelessWidget {
-  const DemoApp({super.key});
+  const DemoApp({
+    super.key,
+    this.embed = false,
+    this.initialLocale = PlayerLocale.fa,
+  });
+
+  final bool embed;
+  final PlayerLocale initialLocale;
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +94,47 @@ class DemoApp extends StatelessWidget {
         ),
         scaffoldBackgroundColor: const Color(0xFF101014),
       ),
-      home: const PlaygroundPage(),
+      home: embed
+          ? EmbedPage(locale: initialLocale)
+          : const PlaygroundPage(),
+    );
+  }
+}
+
+/// Player-only page for the docs iframe: fills the viewport, no chrome.
+class EmbedPage extends StatefulWidget {
+  const EmbedPage({super.key, required this.locale});
+
+  final PlayerLocale locale;
+
+  @override
+  State<EmbedPage> createState() => _EmbedPageState();
+}
+
+class _EmbedPageState extends State<EmbedPage> {
+  String _currentEpisode = 'e1';
+  bool _liked = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final fa = widget.locale == PlayerLocale.fa;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: PlayoraPlayer(
+        src: _stream,
+        poster: _poster,
+        thumbnails: _thumbnails,
+        subtitles: _subtitles,
+        title: fa ? 'نبرد اسپرایت‌ها' : 'Sprite Fight',
+        locale: widget.locale,
+        expand: true,
+        episodes: _episodesFor(widget.locale),
+        currentEpisodeId: _currentEpisode,
+        onEpisodeChange: (id) => setState(() => _currentEpisode = id),
+        liked: _liked,
+        onLike: (liked) => setState(() => _liked = liked),
+        persistSettings: true,
+      ),
     );
   }
 }

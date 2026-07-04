@@ -82,12 +82,24 @@
     h2 .hash{color:var(--accent);margin-inline-end:8px}
     .intro{color:var(--muted);max-width:760px;margin:0 0 20px}
 
-    .demo-frame{
-      position:relative;width:100%;aspect-ratio:16/9;background:#000;
+    .demo-shell{
       border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;
-      box-shadow:0 22px 60px -18px rgba(0,0,0,.75);
+      background:var(--bg-2);
+      box-shadow:0 1px 0 rgba(232,184,75,.25) inset,
+                 0 34px 90px -30px rgba(232,184,75,.16),
+                 0 22px 60px -18px rgba(0,0,0,.8);
     }
-    .demo-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+    .demo-bar{
+      display:flex;align-items:center;gap:12px;padding:10px 16px;
+      background:var(--bg-2);border-bottom:1px solid var(--border);
+    }
+    .demo-dots{display:flex;gap:6px;flex:none}
+    .demo-dots i{width:10px;height:10px;border-radius:50%;display:block;background:#2c2c35}
+    .demo-dots i:first-child{background:var(--accent)}
+    .demo-bar-title{font-size:12.5px;color:var(--muted)}
+    .demo-bar a{margin-inline-start:auto;font-size:12.5px;font-weight:700;flex:none}
+    .demo-frame{position:relative;width:100%;aspect-ratio:16/9;background:#000}
+    .demo-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block}
     .demo-note{font-size:13px;color:var(--muted);margin-top:12px;text-align:center}
 
     pre{
@@ -175,13 +187,19 @@
 
   <section id="demo">
     <h2><span class="hash">#</span><span data-t="demo.title">Live demo</span></h2>
-    <p class="intro" data-t="demo.intro">The real example app, compiled to the web — the same player that ships in the package. HLS with quality levels, playlist, ads, gestures and the full skin.</p>
-    <div class="demo-frame">
-      <iframe src="./demo/" title="Playora live demo" allow="fullscreen; autoplay" allowfullscreen loading="lazy"></iframe>
+    <p class="intro" data-t="demo.intro">The player itself, live — the same build that ships in the package: HLS with quality levels, playlist &amp; seasons, subtitles and the full skin. Every feature toggle (ads, restriction, badge, …) lives in the full playground.</p>
+    <div class="demo-shell">
+      <div class="demo-bar">
+        <span class="demo-dots"><i></i><i></i><i></i></span>
+        <span class="demo-bar-title" data-t="demo.bar">playora — live player</span>
+        <a href="./demo/" target="_blank" rel="noopener" data-t="demo.open">Open the full playground ↗</a>
+      </div>
+      <div class="demo-frame">
+        <iframe id="demoFrame" src="./demo/?embed=1&amp;lang=en" title="Playora live demo" allow="fullscreen; autoplay" allowfullscreen loading="lazy"></iframe>
+      </div>
     </div>
     <p class="demo-note">
       <span data-t="demo.note">Gestures are mobile-first — open the demo full-page on a phone for the complete experience.</span>
-      <a href="./demo/" target="_blank" rel="noopener" data-t="demo.open">Open full-page ↗</a>
     </p>
   </section>
 
@@ -312,9 +330,10 @@ const C = {
     "hero.ctaDemo":"▶ Live demo","hero.ctaGh":"GitHub",
     pills:["Flutter 3+","media_kit + hls.js","Dart 3","RTL / LTR","6 platforms","MIT"],
     "demo.title":"Live demo",
-    "demo.intro":"The real example app, compiled to the web — the same player that ships in the package. HLS with quality levels, playlist, ads, gestures and the full skin.",
-    "demo.note":"Gestures are mobile-first — open the demo full-page on a phone for the complete experience. ",
-    "demo.open":"Open full-page ↗",
+    "demo.intro":"The player itself, live — the same build that ships in the package: HLS with quality levels, playlist & seasons, subtitles and the full skin. Every feature toggle (ads, restriction, badge, …) lives in the full playground.",
+    "demo.bar":"playora — live player",
+    "demo.note":"Gestures are mobile-first — open the demo full-page on a phone for the complete experience.",
+    "demo.open":"Open the full playground ↗",
     "start.title":"Quick start",
     "start.intro":"Add the git dependency, initialize media_kit once, then point the player at an HLS or MP4 source.",
     "start.outro":"That's it — a self-contained player with zero network calls beyond the stream itself. Analytics, resume and providers are all opt-in.",
@@ -380,9 +399,10 @@ const C = {
     "hero.ctaDemo":"▶ دموی زنده","hero.ctaGh":"گیت‌هاب",
     pills:["Flutter 3+","media_kit + hls.js","Dart 3","راست‌چین / چپ‌چین","۶ پلتفرم","MIT"],
     "demo.title":"دموی زنده",
-    "demo.intro":"همان اپ نمونهٔ واقعی، کامپایل‌شده برای وب — همان پلیری که در پکیج عرضه می‌شود. HLS با سطوح کیفیت، لیست پخش، تبلیغ، ژست‌ها و پوستهٔ کامل.",
-    "demo.note":"ژست‌ها برای موبایل طراحی شده‌اند — برای تجربهٔ کامل، دمو را روی گوشی تمام‌صفحه باز کنید. ",
-    "demo.open":"باز کردن تمام‌صفحه ↗",
+    "demo.intro":"خودِ پلیر، زنده و همین‌جا — همان بیلدی که در پکیج عرضه می‌شود: HLS با سطوح کیفیت، لیست پخش و فصل‌ها، زیرنویس و پوستهٔ کامل. کلید همهٔ امکانات (تبلیغ، محدودیت شبکه، بج و…) در پلی‌گراند کامل است.",
+    "demo.bar":"playora — پلیر زنده",
+    "demo.note":"ژست‌ها برای موبایل طراحی شده‌اند — برای تجربهٔ کامل، دمو را روی گوشی تمام‌صفحه باز کنید.",
+    "demo.open":"باز کردن پلی‌گراند کامل ↗",
     "start.title":"شروع سریع",
     "start.intro":"وابستگی گیت را اضافه کنید، media_kit را یک بار مقداردهی کنید و سپس پلیر را به یک منبع HLS یا MP4 وصل کنید.",
     "start.outro":"همین! یک پلیر کاملاً مستقل، بدون هیچ درخواست شبکه‌ای جز خود استریم. آنالیتیکس، ادامهٔ تماشا و پرووایدرها همگی اختیاری‌اند.",
@@ -459,6 +479,10 @@ function render(lang){
   const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   document.getElementById("apiRows").innerHTML =
     t.api.map(([p,ty,d]) => `<tr><td><code>${esc(p)}</code></td><td><code>${esc(ty)}</code></td><td class="desc">${esc(d)}</td></tr>`).join("");
+  // Keep the embedded player's UI language in sync (reload only on change).
+  const frame = document.getElementById("demoFrame");
+  const src = `./demo/?embed=1&lang=${lang}`;
+  if (frame.getAttribute("src") !== src) frame.setAttribute("src", src);
   try { localStorage.setItem("playora-docs-lang", lang); } catch(e){}
 }
 
