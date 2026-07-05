@@ -383,6 +383,14 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     super.didUpdateWidget(oldWidget);
     final old = oldWidget;
 
+    // Host prop changes (liked, title, notice, …) must also reach the
+    // fullscreen route — it lives in a separate element tree and only
+    // re-renders off this notifier and the playback state. Deferred:
+    // notifying mid-build would mark a sibling route dirty.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _revision.value++;
+    });
+
     if (old.ad != widget.ad || !listEquals(old.ads, widget.ads)) {
       _adBreaks = _normalizeAdBreaks();
     }
@@ -768,6 +776,20 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     widget.onLike?.call(liked);
   }
 
+  /// Resume-banner tap. mpv silently drops seeks issued between `open()` and
+  /// the first frame (common on Android when the banner is tapped right
+  /// away), so before playback has really started the source is reloaded
+  /// with mpv's reliable `start:` — once playing, a plain seek.
+  Future<void> _resumeFrom(Duration position) async {
+    final state = _controller.state.value;
+    if (state.started && state.canPlay) {
+      await _controller.seek(position);
+      await _controller.play();
+    } else {
+      await _loadContent(play: true, startAt: position);
+    }
+  }
+
   // -------------------------------------------------------------- fullscreen
 
   /// [fullscreenOnPlay] applied to self-starting playback (autoplay or a
@@ -925,6 +947,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
                 fullscreenOnPlay: widget.fullscreenOnPlay,
                 resume: _resumePoint,
                 onDismissResume: () => setState(() => _resumePoint = null),
+                onResumeTap: _resumeFrom,
                 persistSettings: widget.persistSettings,
                 prefsStore: _prefsStore,
                 notice: restriction == null ? widget.notice : null,

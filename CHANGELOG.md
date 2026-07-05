@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2
+
+- Fix: the fullscreen route now re-renders when host props change (liked,
+  title, notice, …) — previously only the player's own state updates reached
+  it, so e.g. a controlled like button never visually toggled in fullscreen.
+- Fix: the resume banner restarts the source at the saved position (mpv
+  `start:`) when playback hasn't begun yet — early seeks are silently dropped
+  by mpv on some platforms, which restarted playback at 0:00. Once playback
+  has started it seeks as before.
+
 ## 0.2.1
 
 - Fix: a playlist handed to the player after mount (hosts fetching episodes

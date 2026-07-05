@@ -56,6 +56,7 @@ class PlayerSkin extends StatefulWidget {
     this.fullscreenOnPlay = false,
     this.resume,
     this.onDismissResume,
+    this.onResumeTap,
     this.persistSettings = false,
     this.prefsStore,
     this.notice,
@@ -104,6 +105,11 @@ class PlayerSkin extends StatefulWidget {
   final bool fullscreenOnPlay;
   final ResumePoint? resume;
   final VoidCallback? onDismissResume;
+
+  /// Resume-CTA handler. The orchestrator restarts the source at the saved
+  /// position when playback hasn't started yet (early seeks are unreliable);
+  /// when null, falls back to a plain seek + play.
+  final ValueChanged<Duration>? onResumeTap;
   final bool persistSettings;
   final PlayerPrefsStore? prefsStore;
 
@@ -622,8 +628,12 @@ class _PlayerSkinState extends State<PlayerSkin> {
             Center(
               child: FilledButton(
                 onPressed: () {
-                  controller.seek(resume.position);
-                  controller.play();
+                  if (widget.onResumeTap != null) {
+                    widget.onResumeTap!(resume.position);
+                  } else {
+                    controller.seek(resume.position);
+                    controller.play();
+                  }
                   widget.onDismissResume?.call();
                 },
                 style: FilledButton.styleFrom(
