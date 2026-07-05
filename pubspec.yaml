@@ -1,7 +1,10 @@
 name: playora
 description: "Production-grade Flutter video player with a custom RTL-aware skin — HLS/MP4, quality/speed/subtitle/audio menus, ads, gestures, playlists and optional analytics."
 version: 0.4.1
-homepage: https://github.com/Ali-Roodi/playora
+homepage: https://ali-roodi.github.io/playora/
+repository: https://github.com/Ali-Roodi/playora
+issue_tracker: https://github.com/Ali-Roodi/playora/issues
+topics: [video, player, hls, media-kit, rtl]
 
 environment:
   sdk: ^3.12.1

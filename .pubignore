@@ -1,0 +1,30 @@
+# A .pubignore replaces .gitignore for publishing, so it must re-list the
+# usual excludes too.
+*.class
+*.log
+.DS_Store
+.dart_tool/
+.flutter-plugins-dependencies
+.idea/
+.metadata
+build/
+coverage/
+pubspec.lock
+
+# Not part of the package: the docs site and CI live in the repo only.
+site/
+.github/
+
+# Keep the example slim: lib + pubspec are enough for the pub.dev Example
+# tab; the platform scaffolding can be regenerated with `flutter create .`.
+example/android/
+example/ios/
+example/linux/
+example/macos/
+example/windows/
+example/web/
+example/build/
+example/.dart_tool/
+example/.metadata
+example/.flutter-plugins-dependencies
+example/pubspec.lock
