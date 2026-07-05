@@ -58,6 +58,7 @@ class PlayoraPlayer extends StatefulWidget {
     this.aspectRatio = 16 / 9,
     this.expand = false,
     this.videoFit = BoxFit.contain,
+    this.liveScrubPreview = true,
     this.episodes,
     this.currentEpisodeId,
     this.onEpisodeChange,
@@ -142,6 +143,11 @@ class PlayoraPlayer extends StatefulWidget {
 
   /// How the video scales inside the surface (fullscreen included).
   final BoxFit videoFit;
+
+  /// Without a [thumbnails] track, dragging the scrubber pauses and seeks
+  /// (throttled, keyframe-fast) so the video surface itself previews the
+  /// target frame; playback resumes on release.
+  final bool liveScrubPreview;
 
   /// Playlist; enables the panel + prev/next. [Episode.group] adds season
   /// headers; an up-next card appears near the end.
@@ -948,6 +954,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
                 resume: _resumePoint,
                 onDismissResume: () => setState(() => _resumePoint = null),
                 onResumeTap: _resumeFrom,
+                liveScrubPreview: widget.liveScrubPreview,
                 persistSettings: widget.persistSettings,
                 prefsStore: _prefsStore,
                 notice: restriction == null ? widget.notice : null,

@@ -57,6 +57,7 @@ class PlayerSkin extends StatefulWidget {
     this.resume,
     this.onDismissResume,
     this.onResumeTap,
+    this.liveScrubPreview = true,
     this.persistSettings = false,
     this.prefsStore,
     this.notice,
@@ -110,6 +111,11 @@ class PlayerSkin extends StatefulWidget {
   /// position when playback hasn't started yet (early seeks are unreliable);
   /// when null, falls back to a plain seek + play.
   final ValueChanged<Duration>? onResumeTap;
+
+  /// Live scrub preview: without a thumbnail track, dragging the scrubber
+  /// pauses and seeks (throttled, keyframe-fast) so the video surface itself
+  /// previews the target frame; playback resumes on release.
+  final bool liveScrubPreview;
   final bool persistSettings;
   final PlayerPrefsStore? prefsStore;
 
@@ -214,6 +220,45 @@ class _PlayerSkinState extends State<PlayerSkin> {
     final next = !_liked;
     if (!_likeControlled) setState(() => _internalLiked = next);
     widget.onLike?.call(next);
+  }
+
+  // ------------------------------------------------------ live scrub preview
+
+  bool get _liveScrub => widget.liveScrubPreview && widget.thumbnails == null;
+
+  bool _scrubWasPlaying = false;
+  DateTime _lastLiveSeekAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _onScrubStart() {
+    _scrubWasPlaying = controller.state.value.playing;
+    controller.pause();
+  }
+
+  void _onScrubUpdate(Duration target) {
+    // Keyframe seeks while paused paint the target frame; throttle so an HLS
+    // stream isn't hammered with segment fetches mid-drag.
+    final now = DateTime.now();
+    if (now.difference(_lastLiveSeekAt) <
+        const Duration(milliseconds: 350)) {
+      return;
+    }
+    _lastLiveSeekAt = now;
+    controller.seek(target);
+  }
+
+  void _onScrubCommit(Duration target) {
+    controller.seek(target);
+    if (_scrubWasPlaying) {
+      _scrubWasPlaying = false;
+      controller.play();
+    }
+  }
+
+  void _onScrubCancel() {
+    if (_scrubWasPlaying) {
+      _scrubWasPlaying = false;
+      controller.play();
+    }
   }
 
   void _openPanel(void Function() open) {
@@ -726,9 +771,12 @@ class _PlayerSkinState extends State<PlayerSkin> {
             position: controller.position,
             duration: controller.duration,
             buffer: controller.buffer,
-            onSeek: controller.seek,
+            onSeek: _liveScrub ? _onScrubCommit : controller.seek,
             thumbnails: widget.thumbnails,
             onInteraction: _ping,
+            onScrubStart: _liveScrub ? _onScrubStart : null,
+            onScrubUpdate: _liveScrub ? _onScrubUpdate : null,
+            onScrubCancel: _liveScrub ? _onScrubCancel : null,
           ),
           LayoutBuilder(builder: (context, constraints) {
             // Narrow (portrait) widths: shed the least essential transport

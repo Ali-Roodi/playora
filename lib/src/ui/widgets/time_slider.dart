@@ -27,6 +27,9 @@ class PlayerTimeSlider extends StatefulWidget {
     required this.onSeek,
     this.thumbnails,
     this.onInteraction,
+    this.onScrubStart,
+    this.onScrubUpdate,
+    this.onScrubCancel,
   });
 
   final PlayoraTheme theme;
@@ -38,6 +41,13 @@ class PlayerTimeSlider extends StatefulWidget {
 
   /// Called on any pointer activity (keeps the controls revealed).
   final VoidCallback? onInteraction;
+
+  /// Drag-scrub lifecycle (used by the skin for the live scrub preview).
+  /// A completed drag ends with [onSeek]; an aborted one with
+  /// [onScrubCancel].
+  final VoidCallback? onScrubStart;
+  final ValueChanged<Duration>? onScrubUpdate;
+  final VoidCallback? onScrubCancel;
 
   @override
   State<PlayerTimeSlider> createState() => _PlayerTimeSliderState();
@@ -84,6 +94,7 @@ class _PlayerTimeSliderState extends State<PlayerTimeSlider> {
           },
           onHorizontalDragStart: (d) {
             widget.onInteraction?.call();
+            widget.onScrubStart?.call();
             setState(() {
               _dragging = true;
               _previewFraction = _fractionAt(d.localPosition, width);
@@ -91,7 +102,11 @@ class _PlayerTimeSliderState extends State<PlayerTimeSlider> {
           },
           onHorizontalDragUpdate: (d) {
             widget.onInteraction?.call();
-            setState(() => _previewFraction = _fractionAt(d.localPosition, width));
+            final fraction = _fractionAt(d.localPosition, width);
+            setState(() => _previewFraction = fraction);
+            if (_duration > Duration.zero) {
+              widget.onScrubUpdate?.call(_timeAt(fraction));
+            }
           },
           onHorizontalDragEnd: (_) {
             final f = _previewFraction;
@@ -99,12 +114,19 @@ class _PlayerTimeSliderState extends State<PlayerTimeSlider> {
               _dragging = false;
               _previewFraction = null;
             });
-            if (f != null) _commit(f);
+            if (f != null) {
+              _commit(f);
+            } else {
+              widget.onScrubCancel?.call();
+            }
           },
-          onHorizontalDragCancel: () => setState(() {
-            _dragging = false;
-            _previewFraction = null;
-          }),
+          onHorizontalDragCancel: () {
+            widget.onScrubCancel?.call();
+            setState(() {
+              _dragging = false;
+              _previewFraction = null;
+            });
+          },
           child: SizedBox(
             height: 36,
             child: Stack(

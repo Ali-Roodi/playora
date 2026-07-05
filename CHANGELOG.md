@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Live scrub preview: without a WebVTT thumbnail track, dragging the scrubber
+  now pauses and seeks (throttled, keyframe-fast) so the video surface itself
+  previews the target frame — playback resumes on release. Opt out with
+  `liveScrubPreview: false`. With a thumbnail track the sprite bubble is used
+  as before.
+
 ## 0.2.2
 
 - Fix: the fullscreen route now re-renders when host props change (liked,
