@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Fullscreen controls (skin, ad UI, overlays) now sit inside a SafeArea so
+  they clear display cutouts / punch-hole cameras in landscape; the video
+  itself stays full-bleed.
+
 ## 0.4.0
 
 - `AdConfig.skippable: false` hides the skip button entirely (previously the

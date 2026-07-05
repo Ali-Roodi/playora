@@ -916,6 +916,86 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     final state = _controller.state.value;
     final showCover = !showingAd && !_coverDismissed && !state.started;
 
+    // Everything above the video: ad UI or the skin, plus blocking overlays.
+    final overlays = Stack(
+      fit: StackFit.expand,
+      children: [
+        if (showingAd)
+          AdOverlay(
+            controller: _controller,
+            theme: theme,
+            textDirection: textDirection,
+            strings: strings,
+            locale: widget.locale,
+            skipAfter: _activeAd!.brk.skipAfter,
+            skippable: _activeAd!.brk.skippable,
+            clickThrough: _activeAd!.brk.clickThrough,
+            onEnd: _endAd,
+          )
+        else
+          Positioned.fill(
+            child: PlayerSkin(
+              key: ValueKey('skin-$fullscreen'),
+              controller: _controller,
+              theme: theme,
+              strings: strings,
+              locale: widget.locale,
+              textDirection: textDirection,
+              title: _effectiveTitle,
+              episodeLabel: _effectiveEpisodeLabel,
+              poster: showCover ? _effectivePoster : null,
+              showCover: showCover,
+              onCoverPlay: () {
+                setState(() => _coverDismissed = true);
+                _controller.play();
+              },
+              thumbnails: _thumbnailTrack,
+              qualityValidate: widget.qualityValidate,
+              hasPrev: _hasPrev,
+              hasNext: _hasNext,
+              onPrev: _hasPrev
+                  ? () => widget.onEpisodeChange?.call(
+                      widget.episodes![_episodeIndex - 1].id,
+                    )
+                  : null,
+              onNext: _hasNext
+                  ? () => widget.onEpisodeChange?.call(_nextEpisode!.id)
+                  : null,
+              onBack: widget.onBack,
+              episodes: widget.episodes,
+              currentEpisodeId: _episode?.id,
+              onSelectEpisode: widget.onEpisodeChange,
+              nextEpisode: _nextEpisode,
+              onLike: widget.onLike != null ? _onLike : null,
+              liked: widget.liked,
+              isFullscreen: _isFullscreen,
+              onToggleFullscreen: _toggleFullscreen,
+              fullscreenOnPlay: widget.fullscreenOnPlay,
+              resume: _resumePoint,
+              onDismissResume: () => setState(() => _resumePoint = null),
+              onResumeTap: _resumeFrom,
+              liveScrubPreview: widget.liveScrubPreview,
+              persistSettings: widget.persistSettings,
+              prefsStore: _prefsStore,
+              notice: restriction == null ? widget.notice : null,
+              badge: restriction == null ? widget.badge : null,
+              extraOverlays: widget.overlayBuilder?.call(context) ?? const [],
+            ),
+          ),
+        if (restriction != null)
+          RestrictionOverlay(
+            theme: theme,
+            textDirection: textDirection,
+            restriction: restriction,
+            strings: strings,
+          ),
+        // Host- or provider-driven loading (resolving the source, fetching
+        // ads, etc.) — above the cover/skin so it's visible before playback.
+        if ((widget.loading || _vodLoading) && !showingAd)
+          LoadingSpinner(theme: theme, strings: strings, scrim: true),
+      ],
+    );
+
     return ColoredBox(
       color: Colors.black,
       child: Stack(
@@ -930,79 +1010,12 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
               visible: false,
             ),
           ),
-          if (showingAd)
-            AdOverlay(
-              controller: _controller,
-              theme: theme,
-              textDirection: textDirection,
-              strings: strings,
-              locale: widget.locale,
-              skipAfter: _activeAd!.brk.skipAfter,
-              skippable: _activeAd!.brk.skippable,
-              clickThrough: _activeAd!.brk.clickThrough,
-              onEnd: _endAd,
-            )
+          // Fullscreen: the video stays full-bleed but the controls avoid
+          // the display cutout / notch.
+          if (fullscreen)
+            Positioned.fill(child: SafeArea(child: overlays))
           else
-            Positioned.fill(
-              child: PlayerSkin(
-                key: ValueKey('skin-$fullscreen'),
-                controller: _controller,
-                theme: theme,
-                strings: strings,
-                locale: widget.locale,
-                textDirection: textDirection,
-                title: _effectiveTitle,
-                episodeLabel: _effectiveEpisodeLabel,
-                poster: showCover ? _effectivePoster : null,
-                showCover: showCover,
-                onCoverPlay: () {
-                  setState(() => _coverDismissed = true);
-                  _controller.play();
-                },
-                thumbnails: _thumbnailTrack,
-                qualityValidate: widget.qualityValidate,
-                hasPrev: _hasPrev,
-                hasNext: _hasNext,
-                onPrev: _hasPrev
-                    ? () => widget.onEpisodeChange?.call(
-                        widget.episodes![_episodeIndex - 1].id,
-                      )
-                    : null,
-                onNext: _hasNext
-                    ? () => widget.onEpisodeChange?.call(_nextEpisode!.id)
-                    : null,
-                onBack: widget.onBack,
-                episodes: widget.episodes,
-                currentEpisodeId: _episode?.id,
-                onSelectEpisode: widget.onEpisodeChange,
-                nextEpisode: _nextEpisode,
-                onLike: widget.onLike != null ? _onLike : null,
-                liked: widget.liked,
-                isFullscreen: _isFullscreen,
-                onToggleFullscreen: _toggleFullscreen,
-                fullscreenOnPlay: widget.fullscreenOnPlay,
-                resume: _resumePoint,
-                onDismissResume: () => setState(() => _resumePoint = null),
-                onResumeTap: _resumeFrom,
-                liveScrubPreview: widget.liveScrubPreview,
-                persistSettings: widget.persistSettings,
-                prefsStore: _prefsStore,
-                notice: restriction == null ? widget.notice : null,
-                badge: restriction == null ? widget.badge : null,
-                extraOverlays: widget.overlayBuilder?.call(context) ?? const [],
-              ),
-            ),
-          if (restriction != null)
-            RestrictionOverlay(
-              theme: theme,
-              textDirection: textDirection,
-              restriction: restriction,
-              strings: strings,
-            ),
-          // Host- or provider-driven loading (resolving the source, fetching
-          // ads, etc.) — above the cover/skin so it's visible before playback.
-          if ((widget.loading || _vodLoading) && !showingAd)
-            LoadingSpinner(theme: theme, strings: strings, scrim: true),
+            overlays,
         ],
       ),
     );
