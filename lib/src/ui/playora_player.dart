@@ -84,9 +84,9 @@ class PlayoraPlayer extends StatefulWidget {
     this.strings,
     this.overlayBuilder,
   }) : assert(
-          src != null || sources != null || episodes != null,
-          'PlayoraPlayer needs src, sources or episodes',
-        );
+         src != null || sources != null || episodes != null,
+         'PlayoraPlayer needs src, sources or episodes',
+       );
 
   /// Source: an HLS/MP4 URL (ignored if `episodes`/`currentEpisodeId` resolve
   /// one). For a non-standard [vodType], an opaque play token.
@@ -296,8 +296,6 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
 
   StreamSubscription<void>? _completedSub;
 
-  bool get _hasPreRoll => _adBreaks.any((b) => b.brk.offset.isPre);
-
   Episode? get _episode {
     final episodes = widget.episodes;
     if (episodes == null || episodes.isEmpty) return null;
@@ -398,7 +396,21 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     });
 
     if (old.ad != widget.ad || !listEquals(old.ads, widget.ads)) {
+      // A new ad schedule (e.g. the host refetched ads for a new episode)
+      // starts a fresh played-state; the old one belonged to the old list.
       _adBreaks = _normalizeAdBreaks();
+      _playedAds.clear();
+      // A pending pre-roll only makes sense while the content is still at the
+      // start (the schedule usually lands right after an episode loads).
+      if (_activeAd == null &&
+          _controller.position.value < const Duration(seconds: 10)) {
+        final pre = _nextPendingAd((b) => b.brk.offset.isPre);
+        if (pre != null) {
+          _resumeAfterAd = _controller.position.value;
+          _controller.pause();
+          _playAd(pre);
+        }
+      }
     }
     if (old.settingsKey != widget.settingsKey) {
       _prefsStore = PlayerPrefsStore(widget.settingsKey);
@@ -410,7 +422,8 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     }
 
     final episodeChanged = _episode?.id != _episodeId;
-    final sourceChanged = old.src != widget.src ||
+    final sourceChanged =
+        old.src != widget.src ||
         !listEquals(old.sources, widget.sources) ||
         old.vodType != widget.vodType;
 
@@ -428,6 +441,9 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       final play = _wasPlaying || _forcePlayNext || _pendingEpisodePlay;
       _forcePlayNext = false;
       _episodeId = _episode?.id;
+      // Each episode gets its own continue-watching offer.
+      _resumeFetched = false;
+      _resumePoint = null;
       final episode = _episode;
       if (episode?.id == _loadedEpisodeId && !sourceChanged) {
         // Back to the episode whose media is already loaded — e.g. the host
@@ -467,7 +483,10 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
         _setupAnalytics();
         _loadContent(play: _wasPlaying, startAt: Duration.zero);
       }
-    } else if (_analyticsConfigIdentityChanged(old.analytics, widget.analytics)) {
+    } else if (_analyticsConfigIdentityChanged(
+      old.analytics,
+      widget.analytics,
+    )) {
       _setupAnalytics();
     }
   }
@@ -478,14 +497,16 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     final list = <_PositionedAdBreak>[];
     final ad = widget.ad;
     if (ad != null) {
-      list.add(_PositionedAdBreak(
-        'pre',
-        AdBreak(
-          src: ad.src,
-          skipAfter: ad.skipAfter,
-          clickThrough: ad.clickThrough,
+      list.add(
+        _PositionedAdBreak(
+          'pre',
+          AdBreak(
+            src: ad.src,
+            skipAfter: ad.skipAfter,
+            clickThrough: ad.clickThrough,
+          ),
         ),
-      ));
+      );
     }
     final ads = widget.ads;
     if (ads != null) {
@@ -527,7 +548,9 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   }
 
   bool _analyticsConfigIdentityChanged(
-      LogplexAnalyticsConfig? a, LogplexAnalyticsConfig? b) {
+    LogplexAnalyticsConfig? a,
+    LogplexAnalyticsConfig? b,
+  ) {
     if (identical(a, b)) return false;
     if (a == null || b == null) return true;
     return a.baseUrl != b.baseUrl ||
@@ -582,20 +605,25 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
 
   void _maybeFetchResume() {
     if (_resumeFetched) return;
-    final enabled = widget.resume &&
-        !_hasPreRoll &&
+    // (A pre-roll no longer suppresses this — the banner lives in the skin,
+    // which isn't shown while an ad plays, so it appears after the ad.)
+    final enabled =
+        widget.resume &&
         (widget.resolveResume != null || _activeAnalyticsCfg != null);
     if (!enabled) return;
     _resumeFetched = true;
-    final source = widget.resolveResume ??
+    final source =
+        widget.resolveResume ??
         () => _analyticsClient?.getResume() ?? Future.value(null);
-    source().then((point) {
-      if (!mounted || point == null) return;
-      // Only offer it when it's worth showing.
-      if (!point.completed && point.position.inSeconds > 5) {
-        setState(() => _resumePoint = point);
-      }
-    }).catchError((_) {});
+    source()
+        .then((point) {
+          if (!mounted || point == null) return;
+          // Only offer it when it's worth showing.
+          if (!point.completed && point.position.inSeconds > 5) {
+            setState(() => _resumePoint = point);
+          }
+        })
+        .catchError((_) {});
   }
 
   // ------------------------------------------------------------------ source
@@ -769,11 +797,9 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       _lastSavedVolume = s.volume;
       _lastSavedMuted = s.muted;
       _lastSavedRate = s.rate;
-      _prefsStore.save(PlayerPrefs(
-        volume: s.volume,
-        muted: s.muted,
-        rate: s.rate,
-      ));
+      _prefsStore.save(
+        PlayerPrefs(volume: s.volume, muted: s.muted, rate: s.rate),
+      );
     });
   }
 
@@ -840,7 +866,8 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     // Force landscape only for landscape (or unknown-size) video.
     final state = _controller.state.value;
-    final landscapeVideo = state.width == null ||
+    final landscapeVideo =
+        state.width == null ||
         state.height == null ||
         state.width! >= state.height!;
     if (landscapeVideo) {
@@ -855,7 +882,8 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     if (!_mobile) return;
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     await SystemChrome.setPreferredOrientations(
-        widget.orientationsAfterFullscreen);
+      widget.orientationsAfterFullscreen,
+    );
   }
 
   // ------------------------------------------------------------------- build
@@ -898,8 +926,9 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
             controls: mkv.NoVideoControls,
             fit: widget.videoFit,
             fill: Colors.black,
-            subtitleViewConfiguration:
-                const mkv.SubtitleViewConfiguration(visible: false),
+            subtitleViewConfiguration: const mkv.SubtitleViewConfiguration(
+              visible: false,
+            ),
           ),
           if (showingAd)
             AdOverlay(
@@ -909,6 +938,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
               strings: strings,
               locale: widget.locale,
               skipAfter: _activeAd!.brk.skipAfter,
+              skippable: _activeAd!.brk.skippable,
               clickThrough: _activeAd!.brk.clickThrough,
               onEnd: _endAd,
             )
@@ -934,9 +964,9 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
                 hasPrev: _hasPrev,
                 hasNext: _hasNext,
                 onPrev: _hasPrev
-                    ? () =>
-                        widget.onEpisodeChange?.call(
-                            widget.episodes![_episodeIndex - 1].id)
+                    ? () => widget.onEpisodeChange?.call(
+                        widget.episodes![_episodeIndex - 1].id,
+                      )
                     : null,
                 onNext: _hasNext
                     ? () => widget.onEpisodeChange?.call(_nextEpisode!.id)

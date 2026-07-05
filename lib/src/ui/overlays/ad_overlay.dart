@@ -18,6 +18,7 @@ class AdOverlay extends StatelessWidget {
     required this.locale,
     required this.skipAfter,
     required this.onEnd,
+    this.skippable = true,
     this.clickThrough,
   });
 
@@ -27,6 +28,9 @@ class AdOverlay extends StatelessWidget {
   final PlayerStrings strings;
   final PlayerLocale locale;
   final Duration skipAfter;
+
+  /// When false, no skip button is rendered — the ad always plays out.
+  final bool skippable;
   final String? clickThrough;
 
   /// Fired on skip (the natural ad end is handled by the orchestrator).
@@ -64,8 +68,10 @@ class AdOverlay extends StatelessWidget {
             child: Row(
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.accent,
                     borderRadius: BorderRadius.circular(6),
@@ -106,53 +112,62 @@ class AdOverlay extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Align(
-                  alignment: AlignmentDirectional.centerEnd,
-                  child: AnimatedBuilder(
-                    animation: controller.position,
-                    builder: (context, _) {
-                      final elapsed = controller.position.value;
-                      final remaining = skipAfter - elapsed;
-                      final canSkip = remaining <= Duration.zero;
-                      final seconds =
-                          (remaining.inMilliseconds / 1000).ceil().clamp(0, 999);
-                      return FilledButton(
-                        onPressed: canSkip ? onEnd : null,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: canSkip
-                              ? theme.accent
-                              : Colors.black.withValues(alpha: 0.6),
-                          foregroundColor: canSkip
-                              ? theme.accentContrast
-                              : Colors.white70,
-                          disabledBackgroundColor:
-                              Colors.black.withValues(alpha: 0.6),
-                          disabledForegroundColor: Colors.white70,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                        ),
-                        child: Text(
-                          canSkip
-                              ? strings.skipAd
-                              : '${strings.skipAd} · ${localeDigits(locale, seconds)}',
-                          textDirection: textDirection,
-                          style: const TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w700),
-                        ),
-                      );
-                    },
+                if (skippable)
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: AnimatedBuilder(
+                      animation: controller.position,
+                      builder: (context, _) {
+                        final elapsed = controller.position.value;
+                        final remaining = skipAfter - elapsed;
+                        final canSkip = remaining <= Duration.zero;
+                        final seconds = (remaining.inMilliseconds / 1000)
+                            .ceil()
+                            .clamp(0, 999);
+                        return FilledButton(
+                          onPressed: canSkip ? onEnd : null,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: canSkip
+                                ? theme.accent
+                                : Colors.black.withValues(alpha: 0.6),
+                            foregroundColor: canSkip
+                                ? theme.accentContrast
+                                : Colors.white70,
+                            disabledBackgroundColor: Colors.black.withValues(
+                              alpha: 0.6,
+                            ),
+                            disabledForegroundColor: Colors.white70,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                          ),
+                          child: Text(
+                            canSkip
+                                ? strings.skipAd
+                                : '${strings.skipAd} · ${localeDigits(locale, seconds)}',
+                            textDirection: textDirection,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ),
-                ),
                 const SizedBox(height: 10),
                 AnimatedBuilder(
-                  animation: Listenable.merge(
-                      [controller.position, controller.duration]),
+                  animation: Listenable.merge([
+                    controller.position,
+                    controller.duration,
+                  ]),
                   builder: (context, _) {
                     final total = controller.duration.value.inMilliseconds;
                     final progress = total <= 0
                         ? 0.0
                         : (controller.position.value.inMilliseconds / total)
-                            .clamp(0.0, 1.0);
+                              .clamp(0.0, 1.0);
                     return ClipRRect(
                       borderRadius: BorderRadius.circular(2),
                       child: SizedBox(

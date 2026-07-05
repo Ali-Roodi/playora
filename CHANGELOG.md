@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+- `AdConfig.skippable: false` hides the skip button entirely (previously the
+  only way to make an ad unskippable was an absurd `skipAfter`, which showed
+  a huge countdown).
+- Ad types (`AdConfig`, `AdBreak`, `AdOffset`) now have value equality, and a
+  *changed* ad list resets the played state — hosts can refetch the schedule
+  per episode. If the new schedule has a pre-roll and the content is still
+  near the start, it plays.
+- Per-episode resume: switching episodes re-runs `resolveResume`, so each
+  episode gets its own continue-watching offer. A pre-roll no longer
+  suppresses the resume banner (it simply appears after the ad).
+- Fullscreen always shows a top-left back button that exits fullscreen.
+
 ## 0.3.0
 
 - Live scrub preview: without a WebVTT thumbnail track, dragging the scrubber

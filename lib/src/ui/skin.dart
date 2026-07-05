@@ -150,7 +150,11 @@ class _PlayerSkinState extends State<PlayerSkin> {
   bool get _likeControlled => widget.liked != null;
   bool get _liked => _likeControlled ? widget.liked! : _internalLiked;
   bool get _anyPanelOpen =>
-      _playlistOpen || _settingsOpen || _speedOpen || _captionsOpen || _audioOpen;
+      _playlistOpen ||
+      _settingsOpen ||
+      _speedOpen ||
+      _captionsOpen ||
+      _audioOpen;
   bool get _hasPlaylist => (widget.episodes?.length ?? 0) > 1;
 
   @override
@@ -238,8 +242,7 @@ class _PlayerSkinState extends State<PlayerSkin> {
     // Keyframe seeks while paused paint the target frame; throttle so an HLS
     // stream isn't hammered with segment fetches mid-drag.
     final now = DateTime.now();
-    if (now.difference(_lastLiveSeekAt) <
-        const Duration(milliseconds: 350)) {
+    if (now.difference(_lastLiveSeekAt) < const Duration(milliseconds: 350)) {
       return;
     }
     _lastLiveSeekAt = now;
@@ -438,7 +441,9 @@ class _PlayerSkinState extends State<PlayerSkin> {
         borderRadius: BorderRadius.circular(999),
         child: Container(
           padding: EdgeInsets.symmetric(
-              horizontal: label != null ? 16 : 10, vertical: 10),
+            horizontal: label != null ? 16 : 10,
+            vertical: 10,
+          ),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(999),
             border: Border.all(color: theme.border),
@@ -480,7 +485,9 @@ class _PlayerSkinState extends State<PlayerSkin> {
                   Container(
                     margin: const EdgeInsets.only(top: 4),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.6),
                       borderRadius: BorderRadius.circular(6),
@@ -557,12 +564,16 @@ class _PlayerSkinState extends State<PlayerSkin> {
       padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
       child: Row(
         children: [
-          if (widget.onBack != null)
+          // Top-left back: in fullscreen it exits fullscreen (so landscape
+          // always has a way back); inline it's the host's back handler.
+          if (widget.isFullscreen || widget.onBack != null)
             ControlButton(
               theme: theme,
               tooltip: strings.back,
               icon: Icons.arrow_back,
-              onPressed: widget.onBack,
+              onPressed: widget.isFullscreen
+                  ? widget.onToggleFullscreen
+                  : widget.onBack,
             ),
           const Spacer(),
           if (audioOptions.isNotEmpty)
@@ -612,8 +623,7 @@ class _PlayerSkinState extends State<PlayerSkin> {
               theme: theme,
               tooltip: strings.playlist,
               icon: Icons.playlist_play,
-              onPressed: () =>
-                  _openPanel(() => _playlistOpen = !_playlistOpen),
+              onPressed: () => _openPanel(() => _playlistOpen = !_playlistOpen),
             ),
         ],
       ),
@@ -659,8 +669,10 @@ class _PlayerSkinState extends State<PlayerSkin> {
                   onPressed: widget.onDismissResume,
                   icon: Icon(Icons.close, color: theme.textMuted, size: 18),
                   padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 28, minHeight: 28),
+                  constraints: const BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
                 ),
               ],
             ),
@@ -689,7 +701,9 @@ class _PlayerSkinState extends State<PlayerSkin> {
                   '${strings.resumeCta} ${localeDigits(widget.locale, minute)}',
                   textDirection: widget.textDirection,
                   style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w700),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
@@ -709,8 +723,10 @@ class _PlayerSkinState extends State<PlayerSkin> {
           Row(
             children: [
               AnimatedBuilder(
-                animation: Listenable.merge(
-                    [controller.position, controller.duration]),
+                animation: Listenable.merge([
+                  controller.position,
+                  controller.duration,
+                ]),
                 builder: (context, _) => Text(
                   '${formatDuration(controller.position.value)} / '
                   '${formatDuration(controller.duration.value)}',
@@ -778,95 +794,97 @@ class _PlayerSkinState extends State<PlayerSkin> {
             onScrubUpdate: _liveScrub ? _onScrubUpdate : null,
             onScrubCancel: _liveScrub ? _onScrubCancel : null,
           ),
-          LayoutBuilder(builder: (context, constraints) {
-            // Narrow (portrait) widths: shed the least essential transport
-            // buttons instead of overflowing — prev/next stay reachable from
-            // the playlist panel, ±10s via double-tap gestures.
-            final w = constraints.maxWidth;
-            final showPrevNext = _hasPlaylist && w >= 480;
-            final showSeekButtons = w >= 380;
-            return Row(
-              children: [
-                // Left: lock + speed.
-                ControlButton(
-                  theme: theme,
-                  tooltip: strings.lock,
-                  icon: Icons.lock_outline,
-                  onPressed: () => setState(() {
-                    _locked = true;
-                    _active = false;
-                  }),
-                ),
-                LabelButton(
-                  theme: theme,
-                  label:
-                      '${state.rate == state.rate.roundToDouble() ? state.rate.toInt() : state.rate}X',
-                  tooltip: strings.speed,
-                  onPressed: () => _openPanel(() => _speedOpen = true),
-                ),
-                const Spacer(),
-                // Center transport.
-                if (showPrevNext)
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Narrow (portrait) widths: shed the least essential transport
+              // buttons instead of overflowing — prev/next stay reachable from
+              // the playlist panel, ±10s via double-tap gestures.
+              final w = constraints.maxWidth;
+              final showPrevNext = _hasPlaylist && w >= 480;
+              final showSeekButtons = w >= 380;
+              return Row(
+                children: [
+                  // Left: lock + speed.
                   ControlButton(
                     theme: theme,
-                    tooltip: strings.prevEpisode,
-                    icon: Icons.skip_previous,
-                    onPressed: widget.hasPrev ? widget.onPrev : null,
+                    tooltip: strings.lock,
+                    icon: Icons.lock_outline,
+                    onPressed: () => setState(() {
+                      _locked = true;
+                      _active = false;
+                    }),
                   ),
-                if (showSeekButtons)
+                  LabelButton(
+                    theme: theme,
+                    label:
+                        '${state.rate == state.rate.roundToDouble() ? state.rate.toInt() : state.rate}X',
+                    tooltip: strings.speed,
+                    onPressed: () => _openPanel(() => _speedOpen = true),
+                  ),
+                  const Spacer(),
+                  // Center transport.
+                  if (showPrevNext)
+                    ControlButton(
+                      theme: theme,
+                      tooltip: strings.prevEpisode,
+                      icon: Icons.skip_previous,
+                      onPressed: widget.hasPrev ? widget.onPrev : null,
+                    ),
+                  if (showSeekButtons)
+                    ControlButton(
+                      theme: theme,
+                      tooltip: strings.rewind10,
+                      icon: Icons.replay_10,
+                      onPressed: () =>
+                          controller.seekBy(const Duration(seconds: -10)),
+                    ),
                   ControlButton(
                     theme: theme,
-                    tooltip: strings.rewind10,
-                    icon: Icons.replay_10,
-                    onPressed: () =>
-                        controller.seekBy(const Duration(seconds: -10)),
+                    tooltip: state.playing ? strings.pause : strings.play,
+                    icon: state.playing ? Icons.pause : Icons.play_arrow,
+                    size: 56,
+                    iconSize: 38,
+                    onPressed: controller.togglePlay,
                   ),
-                ControlButton(
-                  theme: theme,
-                  tooltip: state.playing ? strings.pause : strings.play,
-                  icon: state.playing ? Icons.pause : Icons.play_arrow,
-                  size: 56,
-                  iconSize: 38,
-                  onPressed: controller.togglePlay,
-                ),
-                if (showSeekButtons)
+                  if (showSeekButtons)
+                    ControlButton(
+                      theme: theme,
+                      tooltip: strings.forward10,
+                      icon: Icons.forward_10,
+                      onPressed: () =>
+                          controller.seekBy(const Duration(seconds: 10)),
+                    ),
+                  if (showPrevNext)
+                    ControlButton(
+                      theme: theme,
+                      tooltip: strings.nextEpisode,
+                      icon: Icons.skip_next,
+                      onPressed: widget.hasNext ? widget.onNext : null,
+                    ),
+                  const Spacer(),
+                  // Right: fullscreen + volume.
                   ControlButton(
                     theme: theme,
-                    tooltip: strings.forward10,
-                    icon: Icons.forward_10,
-                    onPressed: () =>
-                        controller.seekBy(const Duration(seconds: 10)),
+                    tooltip: widget.isFullscreen
+                        ? strings.fullscreenExit
+                        : strings.fullscreenEnter,
+                    icon: widget.isFullscreen
+                        ? Icons.fullscreen_exit
+                        : Icons.fullscreen,
+                    onPressed: widget.onToggleFullscreen,
                   ),
-                if (showPrevNext)
-                  ControlButton(
+                  _VolumeControl(
                     theme: theme,
-                    tooltip: strings.nextEpisode,
-                    icon: Icons.skip_next,
-                    onPressed: widget.hasNext ? widget.onNext : null,
+                    strings: strings,
+                    isMuted: isMuted,
+                    volume: state.volume,
+                    onToggleMute: controller.toggleMute,
+                    onVolume: controller.setVolume,
                   ),
-                const Spacer(),
-                // Right: fullscreen + volume.
-                ControlButton(
-                  theme: theme,
-                  tooltip: widget.isFullscreen
-                      ? strings.fullscreenExit
-                      : strings.fullscreenEnter,
-                  icon: widget.isFullscreen
-                      ? Icons.fullscreen_exit
-                      : Icons.fullscreen,
-                  onPressed: widget.onToggleFullscreen,
-                ),
-                _VolumeControl(
-                  theme: theme,
-                  strings: strings,
-                  isMuted: isMuted,
-                  volume: state.volume,
-                  onToggleMute: controller.toggleMute,
-                  onVolume: controller.setVolume,
-                ),
-              ],
-            );
-          }),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
@@ -898,11 +916,10 @@ class _PlayerSkinState extends State<PlayerSkin> {
             selected: option.isAuto
                 ? isAuto
                 : option.renditionIndex != null
-                    ? option.renditionIndex == state.renditionIndex
-                    : option.hlsLevelIndex != null
-                        ? !isAuto &&
-                            option.hlsLevelIndex == controller.activeHlsLevel
-                        : !isAuto && option.track?.id == current.id,
+                ? option.renditionIndex == state.renditionIndex
+                : option.hlsLevelIndex != null
+                ? !isAuto && option.hlsLevelIndex == controller.activeHlsLevel
+                : !isAuto && option.track?.id == current.id,
             onSelect: () {
               controller.selectQuality(option);
               _openPanel(() => _settingsOpen = false);
@@ -982,7 +999,8 @@ class _PlayerSkinState extends State<PlayerSkin> {
         for (final option in options)
           RadioOptionData(
             label: option.label,
-            selected: option.track.id == current.id ||
+            selected:
+                option.track.id == current.id ||
                 (current.id == 'auto' && option.track.isDefault == true),
             onSelect: () {
               controller.selectAudio(option);
@@ -1031,7 +1049,9 @@ class _VolumeControlState extends State<_VolumeControl> {
         children: [
           ControlButton(
             theme: theme,
-            tooltip: widget.isMuted ? widget.strings.unmute : widget.strings.mute,
+            tooltip: widget.isMuted
+                ? widget.strings.unmute
+                : widget.strings.mute,
             icon: widget.isMuted ? Icons.volume_off : Icons.volume_up,
             onPressed: widget.onToggleMute,
           ),
@@ -1073,14 +1093,19 @@ class _VolumePainter extends CustomPainter {
     final cy = size.height / 2;
     const h = 4.0;
     RRect r(double to) => RRect.fromRectAndRadius(
-          Rect.fromLTRB(0, cy - h / 2, to, cy + h / 2),
-          const Radius.circular(2),
-        );
+      Rect.fromLTRB(0, cy - h / 2, to, cy + h / 2),
+      const Radius.circular(2),
+    );
     canvas.drawRRect(
-        r(size.width), Paint()..color = theme.text.withValues(alpha: 0.25));
+      r(size.width),
+      Paint()..color = theme.text.withValues(alpha: 0.25),
+    );
     canvas.drawRRect(r(size.width * value), Paint()..color = theme.accent);
     canvas.drawCircle(
-        Offset(size.width * value, cy), 6, Paint()..color = theme.accent);
+      Offset(size.width * value, cy),
+      6,
+      Paint()..color = theme.accent,
+    );
   }
 
   @override

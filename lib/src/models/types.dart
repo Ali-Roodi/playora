@@ -119,7 +119,12 @@ class ExternalSubtitle {
 /// its media URL; the player handles playback + the ad UI + analytics.
 @immutable
 class AdConfig {
-  const AdConfig({required this.src, this.skipAfter = const Duration(seconds: 5), this.clickThrough});
+  const AdConfig({
+    required this.src,
+    this.skipAfter = const Duration(seconds: 5),
+    this.skippable = true,
+    this.clickThrough,
+  });
 
   /// Ad creative source (HLS or MP4).
   final String src;
@@ -127,8 +132,23 @@ class AdConfig {
   /// Time before the skip button activates ([Duration.zero] = always skippable).
   final Duration skipAfter;
 
+  /// When false, the skip button is hidden entirely — the ad always plays out.
+  final bool skippable;
+
   /// Opened externally when the ad surface is tapped.
   final String? clickThrough;
+
+  @override
+  bool operator ==(Object other) =>
+      other.runtimeType == runtimeType &&
+      other is AdConfig &&
+      other.src == src &&
+      other.skipAfter == skipAfter &&
+      other.skippable == skippable &&
+      other.clickThrough == clickThrough;
+
+  @override
+  int get hashCode => Object.hash(src, skipAfter, skippable, clickThrough);
 }
 
 /// Position of an [AdBreak] in the timeline.
@@ -151,6 +171,13 @@ class AdOffset {
   bool get isPre => _kind == 'pre';
   bool get isPost => _kind == 'post';
   bool get isMid => _kind == 'mid';
+
+  @override
+  bool operator ==(Object other) =>
+      other is AdOffset && other._kind == _kind && other.at == at;
+
+  @override
+  int get hashCode => Object.hash(_kind, at);
 }
 
 /// An ad break at a position in the timeline. Use the `ads` parameter for
@@ -160,11 +187,25 @@ class AdBreak extends AdConfig {
   const AdBreak({
     required super.src,
     super.skipAfter,
+    super.skippable,
     super.clickThrough,
     this.offset = AdOffset.pre,
   });
 
   final AdOffset offset;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AdBreak &&
+      other.src == src &&
+      other.skipAfter == skipAfter &&
+      other.skippable == skippable &&
+      other.clickThrough == clickThrough &&
+      other.offset == offset;
+
+  @override
+  int get hashCode =>
+      Object.hash(src, skipAfter, skippable, clickThrough, offset);
 }
 
 /// A notice shown over the player — e.g. an operator/network message
@@ -172,7 +213,12 @@ class AdBreak extends AdConfig {
 /// pass it to show, remove it (or let the user dismiss) to hide.
 @immutable
 class PlayerNotice {
-  const PlayerNotice({required this.message, this.ctaLabel, this.onCta, this.dismissible = true});
+  const PlayerNotice({
+    required this.message,
+    this.ctaLabel,
+    this.onCta,
+    this.dismissible = true,
+  });
 
   final String message;
 
