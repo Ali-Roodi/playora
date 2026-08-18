@@ -798,6 +798,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       ?..track(LogplexEventType.adRequest)
       ..track(LogplexEventType.adStart);
     setState(() => _activeAd = ad);
+    _controller.adPlaying.value = true;
     await _controller.load(url: ad.brk.src, play: true);
   }
 
@@ -807,6 +808,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     _playedAds.add(ad.id);
     _analyticsClient?.track(LogplexEventType.adComplete);
     setState(() => _activeAd = null);
+    _controller.adPlaying.value = false;
 
     final resumeAt = _resumeAfterAd;
     _resumeAfterAd = null;

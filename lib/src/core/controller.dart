@@ -285,6 +285,10 @@ class PlayoraController {
   /// 0..100 while the backend refills after an underrun.
   final ValueNotifier<double> bufferingPercent = ValueNotifier(0);
 
+  /// True while an ad break is on screen. [position] then belongs to the ad,
+  /// not to the content — hosts reporting a watch position must skip those.
+  final ValueNotifier<bool> adPlaying = ValueNotifier(false);
+
   /// Current subtitle cue lines (empty when none). Rendered by the skin.
   final ValueNotifier<List<String>> subtitleCues = ValueNotifier(const []);
 
@@ -912,6 +916,7 @@ class PlayoraController {
     duration.dispose();
     buffer.dispose();
     bufferingPercent.dispose();
+    adPlaying.dispose();
     subtitleCues.dispose();
     await player.dispose();
   }
