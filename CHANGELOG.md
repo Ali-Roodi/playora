@@ -49,6 +49,10 @@ Playback on weak connections, and the "continue watching" position.
   In auto mode the card becomes a "start over" offer.
 - The resume CTA shows `m:ss` rather than a bare minute count (a resume at
   45 s used to read "from minute 0").
+- `PlayoraController.adPlaying` tells a host whether the playhead currently
+  belongs to an ad break. Reporting a watch position without checking it
+  stores the ad's playhead as the content one, and the title then resumes a
+  few seconds in.
 - `PlayoraPlayer.debugLogging` prints `[playora]` diagnostics for the resume,
   load and adaptive-quality paths.
 
