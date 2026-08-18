@@ -6,6 +6,17 @@ enum PlayerLocale { fa, en }
 /// Color scheme of the skin. The video itself always stays black.
 enum PlayerAppearance { dark, light }
 
+/// What the player does with a resolved "continue watching" point.
+enum PlayerResumeMode {
+  /// Start at the beginning and offer a banner the viewer has to tap. The
+  /// position is lost if they ignore it.
+  prompt,
+
+  /// Open the media at the saved position straight away and offer a
+  /// "start over" card for a few seconds instead.
+  auto,
+}
+
 /// VOD source provider. [standard] plays the `src` URL directly; the others
 /// exchange an opaque play token (passed as `src`) for the real stream URL via
 /// the provider's API. Keeps pre-Logplex back-ends working.

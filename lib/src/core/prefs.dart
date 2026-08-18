@@ -6,18 +6,29 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Viewer preferences persisted across sessions when `persistSettings` is on.
 @immutable
 class PlayerPrefs {
-  const PlayerPrefs({this.volume, this.muted, this.rate, this.brightness});
+  const PlayerPrefs({
+    this.volume,
+    this.muted,
+    this.rate,
+    this.brightness,
+    this.autoHeight,
+  });
 
   final double? volume;
   final bool? muted;
   final double? rate;
   final double? brightness;
 
+  /// Last height the adaptive governor settled on — the next session opens
+  /// there instead of re-probing from the startup ceiling.
+  final int? autoHeight;
+
   PlayerPrefs merge(PlayerPrefs patch) => PlayerPrefs(
         volume: patch.volume ?? volume,
         muted: patch.muted ?? muted,
         rate: patch.rate ?? rate,
         brightness: patch.brightness ?? brightness,
+        autoHeight: patch.autoHeight ?? autoHeight,
       );
 
   Map<String, Object?> toJson() => {
@@ -25,6 +36,7 @@ class PlayerPrefs {
         if (muted != null) 'muted': muted,
         if (rate != null) 'rate': rate,
         if (brightness != null) 'brightness': brightness,
+        if (autoHeight != null) 'autoHeight': autoHeight,
       };
 
   factory PlayerPrefs.fromJson(Map<String, dynamic> json) => PlayerPrefs(
@@ -32,6 +44,7 @@ class PlayerPrefs {
         muted: json['muted'] as bool?,
         rate: (json['rate'] as num?)?.toDouble(),
         brightness: (json['brightness'] as num?)?.toDouble(),
+        autoHeight: (json['autoHeight'] as num?)?.toInt(),
       );
 }
 

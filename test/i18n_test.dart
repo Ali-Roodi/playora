@@ -8,7 +8,8 @@ void main() {
       final s = PlayerStrings.of(PlayerLocale.fa);
       expect(s.play, 'پخش');
       expect(s.qualityAuto, 'اتوماتیک');
-      expect(s.resumeCta, 'مشاهده از دقیقه');
+      expect(s.resumeCta, 'ادامه از');
+      expect(s.restartCta, 'پخش از ابتدا');
       expect(s.skipAd, 'رد کردن آگهی');
     });
 
@@ -17,6 +18,7 @@ void main() {
       expect(s.play, 'Play');
       expect(s.nextUpTitle, 'Up next');
       expect(s.off, 'Off');
+      expect(s.restartCta, 'Start from the beginning');
     });
   });
 
@@ -36,6 +38,7 @@ void main() {
     test('fa uses Persian digits', () {
       expect(localeDigits(PlayerLocale.fa, 1402), '۱۴۰۲');
       expect(localeDigits(PlayerLocale.fa, 0), '۰');
+      expect(localeDigits(PlayerLocale.fa, '12:34'), '۱۲:۳۴');
     });
 
     test('en keeps Western digits', () {

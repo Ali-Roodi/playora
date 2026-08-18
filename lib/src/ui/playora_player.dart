@@ -9,6 +9,8 @@ import 'package:media_kit_video/media_kit_video.dart' as mkv;
 import '../analytics/client.dart';
 import '../analytics/tracker.dart';
 import '../analytics/watch_interval.dart';
+import '../core/abr.dart';
+import '../core/buffering.dart';
 import '../core/controller.dart';
 import '../core/prefs.dart';
 import '../core/vod.dart';
@@ -72,12 +74,16 @@ class PlayoraPlayer extends StatefulWidget {
     this.orientationsAfterFullscreen = DeviceOrientation.values,
     this.analytics,
     this.resume = true,
+    this.resumeMode = PlayerResumeMode.prompt,
     this.resolveResume,
     this.onWatchInterval,
     this.watchInterval = const Duration(seconds: 5),
     this.onPlayerReady,
     this.persistSettings = false,
     this.settingsKey = defaultPrefsKey,
+    this.buffering,
+    this.abr = const PlayoraAbrConfig(),
+    this.debugLogging = false,
     this.onBack,
     this.onLike,
     this.liked,
@@ -191,6 +197,14 @@ class PlayoraPlayer extends StatefulWidget {
   /// [resolveResume].
   final bool resume;
 
+  /// What to do with a resolved resume point.
+  ///
+  /// [PlayerResumeMode.prompt] (the default) starts at zero and waits for the
+  /// viewer to tap the banner — ignore it and the watch heartbeat overwrites
+  /// the stored position with the new near-zero one. [PlayerResumeMode.auto]
+  /// opens the media at the saved position instead and offers "start over".
+  final PlayerResumeMode resumeMode;
+
   /// Supply a saved resume point from your own back-end — drives the resume
   /// banner without the Logplex integration.
   final ResumeResolver? resolveResume;
@@ -204,6 +218,18 @@ class PlayoraPlayer extends StatefulWidget {
   /// Exposes the [PlayoraController] for imperative control. Called
   /// with the controller when ready and with null on teardown.
   final ValueChanged<PlayoraController?>? onPlayerReady;
+
+  /// How far ahead the stream is pre-loaded, and how the network stack
+  /// behaves on a weak link. Defaults to [PlayoraBufferConfig.aggressive].
+  final PlayoraBufferConfig? buffering;
+
+  /// Adaptive quality tuning. mpv itself never switches HLS variants, so this
+  /// is what makes "Auto" actually adapt on the native backends.
+  final PlayoraAbrConfig abr;
+
+  /// Print `[playora]` diagnostics for the resume, buffering and adaptive
+  /// quality paths. Debug builds only — it is a no-op in release.
+  final bool debugLogging;
 
   /// Remember volume/mute/speed/brightness and restore them next session.
   final bool persistSettings;
@@ -293,6 +319,11 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   double? _lastSavedVolume;
   bool? _lastSavedMuted;
   double? _lastSavedRate;
+  int? _lastSavedAutoHeight;
+  Timer? _autoHeightDebounce;
+
+  Widget? _cachedVideo;
+  BoxFit? _cachedVideoFit;
 
   StreamSubscription<void>? _completedSub;
 
@@ -337,7 +368,13 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       _mediaKitReady = true;
     }
     WidgetsBinding.instance.addObserver(this);
-    _controller = PlayoraController();
+    _controller = PlayoraController(
+      buffering: widget.buffering,
+      abr: widget.abr,
+    );
+    _controller.qualityValidate = widget.qualityValidate;
+    _controller.debugLogging = widget.debugLogging;
+    _controller.onAutoHeightChanged = _onAutoHeightChanged;
     _prefsStore = PlayerPrefsStore(widget.settingsKey);
     _episodeId = _episode?.id;
     _adBreaks = _normalizeAdBreaks();
@@ -361,6 +398,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     _revision.dispose();
     widget.onPlayerReady?.call(null);
     _persistDebounce?.cancel();
+    _autoHeightDebounce?.cancel();
     _completedSub?.cancel();
     _controller.position.removeListener(_checkMidRolls);
     _controller.state.removeListener(_onPlaybackState);
@@ -542,9 +580,11 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     if (prefs.volume != null) await _controller.setVolume(prefs.volume!);
     if (prefs.muted == true) await _controller.mute();
     if (prefs.rate != null) await _controller.setRate(prefs.rate!);
+    _controller.preferredStartHeight = prefs.autoHeight;
     _lastSavedVolume = prefs.volume;
     _lastSavedMuted = prefs.muted;
     _lastSavedRate = prefs.rate;
+    _lastSavedAutoHeight = prefs.autoHeight;
   }
 
   bool _analyticsConfigIdentityChanged(
@@ -603,33 +643,78 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     _maybeFetchResume();
   }
 
-  void _maybeFetchResume() {
-    if (_resumeFetched) return;
-    // (A pre-roll no longer suppresses this — the banner lives in the skin,
-    // which isn't shown while an ad plays, so it appears after the ad.)
-    final enabled =
-        widget.resume &&
-        (widget.resolveResume != null || _activeAnalyticsCfg != null);
-    if (!enabled) return;
-    _resumeFetched = true;
+  /// `[playora]` diagnostics, opt-in via [PlayoraPlayer.debugLogging].
+  void _log(String message) {
+    if (!widget.debugLogging) return;
+    debugPrint('[playora] $message');
+  }
+
+  bool get _resumeEnabled =>
+      widget.resume &&
+      (widget.resolveResume != null || _activeAnalyticsCfg != null);
+
+  Future<ResumePoint?> _fetchResumePoint() async {
     final source =
         widget.resolveResume ??
         () => _analyticsClient?.getResume() ?? Future.value(null);
-    source()
-        .then((point) {
-          if (!mounted || point == null) return;
-          // Only offer it when it's worth showing.
-          if (!point.completed && point.position.inSeconds > 5) {
-            setState(() => _resumePoint = point);
-          }
-        })
-        .catchError((_) {});
+    try {
+      // Auto mode blocks the first open() on this call — a back-end having a
+      // bad day must not hold playback hostage.
+      final point = await source().timeout(const Duration(seconds: 5));
+      _log(
+        'resume resolved: ${point == null ? 'none' : '${point.position} '
+            '(completed=${point.completed})'}',
+      );
+      return point;
+    } catch (e) {
+      _log('resume lookup failed: $e');
+      return null;
+    }
+  }
+
+  /// Whether a point is worth acting on at all.
+  bool _resumeUsable(ResumePoint? point) =>
+      point != null && !point.completed && point.position.inSeconds > 5;
+
+  /// [PlayerResumeMode.auto]: the position the next [_loadContent] should open
+  /// at. Resolved before the first `open()` so mpv's own `start:` does the
+  /// seek — mid-flight seeks right after open are the unreliable ones.
+  Future<Duration?> _autoResumeStart() async {
+    if (_resumeFetched || !_resumeEnabled) return null;
+    _resumeFetched = true;
+    final point = await _fetchResumePoint();
+    if (!mounted || !_resumeUsable(point)) return null;
+    _log('auto-resume at ${point!.position}');
+    // The card doubles as the "start over" offer in this mode.
+    setState(() => _resumePoint = point);
+    return point.position;
+  }
+
+  void _maybeFetchResume() {
+    if (_resumeFetched) return;
+    if (widget.resumeMode == PlayerResumeMode.auto) return; // handled on load
+    // (A pre-roll no longer suppresses this — the banner lives in the skin,
+    // which isn't shown while an ad plays, so it appears after the ad.)
+    if (!_resumeEnabled) return;
+    _resumeFetched = true;
+    _fetchResumePoint().then((point) {
+      if (!mounted) return;
+      // Only offer it when it's worth showing.
+      if (_resumeUsable(point)) {
+        setState(() => _resumePoint = point);
+      }
+    });
   }
 
   // ------------------------------------------------------------------ source
 
   Future<void> _loadContent({bool play = false, Duration? startAt}) async {
     final generation = ++_loadGeneration;
+    var start = startAt;
+    if (start == null && widget.resumeMode == PlayerResumeMode.auto) {
+      start = await _autoResumeStart();
+      if (!mounted || generation != _loadGeneration) return;
+    }
     final episode = _episode;
     final sources = episode?.sources ?? widget.sources;
     final rawSrc = episode?.src ?? widget.src;
@@ -638,11 +723,12 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     if (sources != null && sources.isNotEmpty) {
       // Manual MP4 renditions — provider resolution doesn't apply.
       _resolvedThumbnailsUrl = thumbnailsUrl;
+      _log('load renditions (${sources.length}) play=$play start=$start');
       await _controller.load(
         renditions: sources,
         externalSubtitles: widget.subtitles,
         play: play,
-        startAt: startAt,
+        startAt: start,
       );
       _loadedEpisodeId = _episodeId;
       _fetchThumbnails(generation);
@@ -673,11 +759,12 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       if (mounted) setState(() => _vodLoading = false);
     }
 
+    _log('load url play=$play start=$start');
     await _controller.load(
       url: url,
       externalSubtitles: widget.subtitles,
       play: play,
-      startAt: startAt,
+      startAt: start,
     );
     _loadedEpisodeId = _episodeId;
     _fetchThumbnails(generation);
@@ -803,6 +890,17 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     });
   }
 
+  /// The governor settled on a height — remember it so the next session can
+  /// open there instead of probing up from the startup ceiling again.
+  void _onAutoHeightChanged(int height) {
+    if (!widget.persistSettings || height == _lastSavedAutoHeight) return;
+    _autoHeightDebounce?.cancel();
+    _autoHeightDebounce = Timer(const Duration(seconds: 5), () {
+      _lastSavedAutoHeight = height;
+      _prefsStore.save(PlayerPrefs(autoHeight: height));
+    });
+  }
+
   void _onLike(bool liked) {
     if (liked) _analyticsClient?.track(LogplexEventType.like);
     widget.onLike?.call(liked);
@@ -814,11 +912,25 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   /// with mpv's reliable `start:` — once playing, a plain seek.
   Future<void> _resumeFrom(Duration position) async {
     final state = _controller.state.value;
+    _log('resume tapped -> $position '
+        '(started=${state.started} canPlay=${state.canPlay})');
     if (state.started && state.canPlay) {
       await _controller.seek(position);
       await _controller.play();
     } else {
       await _loadContent(play: true, startAt: position);
+    }
+  }
+
+  /// "Start over" from the auto-resume card.
+  Future<void> _restartFromStart() async {
+    _log('restart from zero');
+    final state = _controller.state.value;
+    if (state.started && state.canPlay) {
+      await _controller.seek(Duration.zero);
+      await _controller.play();
+    } else {
+      await _loadContent(play: true, startAt: Duration.zero);
     }
   }
 
@@ -905,6 +1017,28 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     );
   }
 
+  /// The video texture. Cached and kept identical across rebuilds: the state
+  /// notifier fires on every buffering flip and the fullscreen route rebuilds
+  /// the whole surface off it, and re-creating the surface widget each time
+  /// costs a texture re-attach on low-end devices. A [RepaintBoundary] keeps
+  /// the video frames from repainting the control layers above them.
+  Widget get _videoSurface {
+    final cached = _cachedVideo;
+    if (cached != null && _cachedVideoFit == widget.videoFit) return cached;
+    _cachedVideoFit = widget.videoFit;
+    return _cachedVideo = RepaintBoundary(
+      child: mkv.Video(
+        controller: _controller.videoController,
+        controls: mkv.NoVideoControls,
+        fit: widget.videoFit,
+        fill: Colors.black,
+        subtitleViewConfiguration: const mkv.SubtitleViewConfiguration(
+          visible: false,
+        ),
+      ),
+    );
+  }
+
   /// The full player surface (video + skin + overlays). Reused by the
   /// fullscreen route.
   Widget buildSurface(BuildContext context, {required bool fullscreen}) {
@@ -972,8 +1106,10 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
               onToggleFullscreen: _toggleFullscreen,
               fullscreenOnPlay: widget.fullscreenOnPlay,
               resume: _resumePoint,
+              resumeIsAuto: widget.resumeMode == PlayerResumeMode.auto,
               onDismissResume: () => setState(() => _resumePoint = null),
               onResumeTap: _resumeFrom,
+              onRestart: _restartFromStart,
               liveScrubPreview: widget.liveScrubPreview,
               persistSettings: widget.persistSettings,
               prefsStore: _prefsStore,
@@ -1001,15 +1137,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          mkv.Video(
-            controller: _controller.videoController,
-            controls: mkv.NoVideoControls,
-            fit: widget.videoFit,
-            fill: Colors.black,
-            subtitleViewConfiguration: const mkv.SubtitleViewConfiguration(
-              visible: false,
-            ),
-          ),
+          _videoSurface,
           // Fullscreen: the video stays full-bleed but the controls avoid
           // the display cutout / notch.
           if (fullscreen)

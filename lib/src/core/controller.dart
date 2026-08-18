@@ -5,8 +5,12 @@ import 'package:media_kit/media_kit.dart' as mk;
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
 import '../models/types.dart';
+import 'abr.dart';
+import 'buffering.dart';
+import 'cache_dir_io.dart' if (dart.library.js_interop) 'cache_dir_web.dart';
 import 'hls_compat_stub.dart'
     if (dart.library.js_interop) 'hls_compat_web.dart';
+import 'mpv_tuning_io.dart' if (dart.library.js_interop) 'mpv_tuning_web.dart';
 
 /// A selectable quality option — either "Auto" (adaptive), an embedded (HLS)
 /// video track, or one of the manual MP4 renditions.
@@ -187,19 +191,87 @@ class PlaybackValue {
 /// Hosts normally don't construct this — [PlayoraPlayer] owns one and hands
 /// it out through `onPlayerReady` for imperative control.
 class PlayoraController {
-  PlayoraController({mk.PlayerConfiguration? configuration})
-      : player = mk.Player(
+  PlayoraController({
+    mk.PlayerConfiguration? configuration,
+    PlayoraBufferConfig? buffering,
+    PlayoraAbrConfig abr = const PlayoraAbrConfig(),
+    mkv.VideoControllerConfiguration? videoConfiguration,
+    this.positionUpdateInterval = const Duration(milliseconds: 200),
+  })  : bufferConfig = buffering ?? const PlayoraBufferConfig.aggressive(),
+        abrConfig = abr,
+        player = mk.Player(
           configuration: configuration ??
-              const mk.PlayerConfiguration(title: 'playora'),
+              mk.PlayerConfiguration(
+                title: 'playora',
+                // Raised again — on disk — once a writable cache directory is
+                // confirmed; this value has to stay RAM-safe.
+                bufferSize:
+                    (buffering ?? const PlayoraBufferConfig.aggressive())
+                        .initialMaxBytes,
+              ),
         ) {
     // Must run before the first open(); media_kit consults canPlayType there.
     ensureWebHlsPlayable();
-    videoController = mkv.VideoController(player);
+    videoController = mkv.VideoController(
+      player,
+      configuration:
+          videoConfiguration ?? const mkv.VideoControllerConfiguration(),
+    );
     _bind();
+    _tuning = _applyTuning();
+    _governor = PlayoraAbrGovernor(
+      config: abrConfig,
+      levels: () => [for (final entry in _ladder()) entry.level],
+      currentIndex: _currentLadderIndex,
+      bufferAhead: () => bufferAhead,
+      playing: () => state.value.playing,
+      stalled: () => state.value.buffering && state.value.started,
+      onSwitch: _applyAbrLevel,
+      onLog: (message) {
+        if (debugLogging) debugPrint('[playora] $message');
+      },
+    );
   }
 
   final mk.Player player;
   late final mkv.VideoController videoController;
+
+  /// Demuxer/network tuning applied to the native backend.
+  final PlayoraBufferConfig bufferConfig;
+
+  /// Adaptive quality tuning.
+  final PlayoraAbrConfig abrConfig;
+
+  /// Minimum wall-clock gap between [position] notifications. mpv reports the
+  /// playhead once per frame; forwarding every one of those rebuilds the
+  /// scrubber 25–60 times a second for no visible gain.
+  final Duration positionUpdateInterval;
+
+  late final PlayoraAbrGovernor _governor;
+  late final Future<void> _tuning;
+  String? _diskCachePath;
+
+  /// Resolves once the native backend has been tuned. [load] awaits it, so
+  /// the first `open()` already runs with the large cache in place.
+  Future<void> get ready => _tuning;
+
+  /// The directory backing the demuxer cache, or null when it lives in RAM.
+  String? get diskCachePath => _diskCachePath;
+
+  /// Hides embedded renditions from the adaptive ladder, mirroring the same
+  /// predicate the quality menu uses.
+  bool Function(int height)? qualityValidate;
+
+  /// Height the adaptive ladder should aim for when a source is opened
+  /// (typically the last height a previous session settled on).
+  int? preferredStartHeight;
+
+  /// Fired whenever the governor settles on a height, so the host can
+  /// remember it for the next session.
+  ValueChanged<int>? onAutoHeightChanged;
+
+  /// Print `[playora]` diagnostics for the adaptive-quality decisions.
+  bool debugLogging = false;
 
   /// Low-frequency consolidated state.
   final ValueNotifier<PlaybackValue> state =
@@ -210,8 +282,21 @@ class PlayoraController {
   final ValueNotifier<Duration> duration = ValueNotifier(Duration.zero);
   final ValueNotifier<Duration> buffer = ValueNotifier(Duration.zero);
 
+  /// 0..100 while the backend refills after an underrun.
+  final ValueNotifier<double> bufferingPercent = ValueNotifier(0);
+
   /// Current subtitle cue lines (empty when none). Rendered by the skin.
   final ValueNotifier<List<String>> subtitleCues = ValueNotifier(const []);
+
+  /// How much media is cached ahead of the playhead.
+  Duration get bufferAhead {
+    final ahead = buffer.value - position.value;
+    return ahead.isNegative ? Duration.zero : ahead;
+  }
+
+  /// Media seconds cached per second of wall clock — 1.0 means the connection
+  /// is exactly keeping up with playback. Exposed for diagnostics.
+  double get fillRate => _governor.fillRate;
 
   final StreamController<SeekEvent> _seeks = StreamController.broadcast();
   final StreamController<String> _errors = StreamController.broadcast();
@@ -237,6 +322,21 @@ class PlayoraController {
   /// those, so it's parked here and applied when the duration arrives.
   Duration? _pendingSeek;
 
+  // Position throttling.
+  Duration _rawPosition = Duration.zero;
+  DateTime _lastPositionPush = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _positionFlush;
+
+  /// Whether the adaptive governor — not a manual pick — owns the quality.
+  bool _autoQuality = true;
+
+  /// Whether the ladder has been seeded for the media that is currently open.
+  bool _startupLevelApplied = false;
+
+  /// True while [load] is re-opening the same logical source (a rendition
+  /// swap), so the ladder and the governor's measurements survive it.
+  bool _internalReload = false;
+
   /// Manual MP4 renditions of the current source, if it was opened as a list.
   List<VideoSource>? get renditions => _renditions;
 
@@ -250,13 +350,19 @@ class PlayoraController {
         _update((v) => v.copyWith(
             playing: playing, started: v.started || playing));
       }),
-      s.buffering.listen(
-          (buffering) => _update((v) => v.copyWith(buffering: buffering))),
+      s.buffering.listen((buffering) {
+        // A stall is the strongest signal the governor gets — surface it
+        // right away instead of on the next throttled position tick.
+        if (buffering) _flushPosition();
+        _update((v) => v.copyWith(buffering: buffering));
+      }),
+      s.bufferingPercentage.listen((p) => bufferingPercent.value = p),
       s.completed.listen((completed) {
+        if (completed) _flushPosition();
         _update((v) => v.copyWith(completed: completed));
         if (completed) _completions.add(null);
       }),
-      s.position.listen((p) => position.value = p),
+      s.position.listen(_onPosition),
       s.duration.listen((d) {
         duration.value = d;
         if (d > Duration.zero) {
@@ -265,7 +371,7 @@ class PlayoraController {
           if (pending != null) {
             _pendingSeek = null;
             final clamped = pending > d ? d : pending;
-            position.value = clamped;
+            _setPosition(clamped);
             player.seek(clamped);
           }
         }
@@ -278,7 +384,12 @@ class PlayoraController {
       s.rate.listen((rate) => _update((v) => v.copyWith(rate: rate))),
       s.width.listen((w) => _update((v) => v.copyWith(width: w))),
       s.height.listen((h) => _update((v) => v.copyWith(height: h))),
-      s.tracks.listen((t) => _update((v) => v.copyWith(tracks: t))),
+      s.tracks.listen((t) {
+        _update((v) => v.copyWith(tracks: t));
+        // HLS variant lists land a moment after the first frames — that is
+        // the first chance to seed the adaptive ladder.
+        _seedStartupLevel();
+      }),
       s.track.listen((t) {
         final wasVideo = state.value.selected.video;
         _update((v) => v.copyWith(
@@ -286,7 +397,11 @@ class PlayoraController {
               // Selecting an embedded subtitle clears the external one.
               clearExternalSubtitle: !t.subtitle.uri,
             ));
-        if (t.video != wasVideo) _qualityChanges.add(t.video);
+        if (t.video != wasVideo) {
+          _qualityChanges.add(t.video);
+          final h = t.video.h;
+          if (_autoQuality && h != null) onAutoHeightChanged?.call(h);
+        }
       }),
       s.subtitle.listen((cues) {
         subtitleCues.value =
@@ -304,6 +419,150 @@ class PlayoraController {
     state.value = fn(state.value);
   }
 
+  // ------------------------------------------------------------- native tune
+
+  Future<void> _applyTuning() async {
+    if (!mpvTuningSupported) return;
+    final path = await resolveCacheDirectory(bufferConfig);
+    if (_disposed) return;
+    _diskCachePath = path;
+    await setMpvProperties(
+      player,
+      bufferConfig.mpvProperties(diskCachePath: path),
+    );
+    if (_disposed || path == null) return;
+    // The large cap is only safe because the cache is a file. If this libmpv
+    // build refused `cache-on-disk`, that many bytes would land on the heap —
+    // pull the cap back to the RAM-safe one.
+    final onDisk = await getMpvProperty(player, 'cache-on-disk');
+    if (_disposed || onDisk == 'yes') return;
+    _diskCachePath = null;
+    await setMpvProperties(player, {
+      'demuxer-max-bytes': '${bufferConfig.memoryMaxBytes}',
+    });
+  }
+
+  // -------------------------------------------------------- position throttle
+
+  void _onPosition(Duration p) {
+    _rawPosition = p;
+    if (positionUpdateInterval <= Duration.zero) {
+      position.value = p;
+      return;
+    }
+    final now = DateTime.now();
+    final elapsed = now.difference(_lastPositionPush);
+    if (elapsed >= positionUpdateInterval) {
+      _positionFlush?.cancel();
+      _positionFlush = null;
+      _lastPositionPush = now;
+      position.value = p;
+      return;
+    }
+    _positionFlush ??= Timer(positionUpdateInterval - elapsed, _flushPosition);
+  }
+
+  void _flushPosition() {
+    _positionFlush?.cancel();
+    _positionFlush = null;
+    if (_disposed) return;
+    _lastPositionPush = DateTime.now();
+    position.value = _rawPosition;
+  }
+
+  /// Publishes a position we set ourselves (seek, resume, source swap) and
+  /// drops any throttled update still queued from the old playhead.
+  void _setPosition(Duration value) {
+    _positionFlush?.cancel();
+    _positionFlush = null;
+    _rawPosition = value;
+    _lastPositionPush = DateTime.now();
+    position.value = value;
+  }
+
+  // ---------------------------------------------------------------- ABR glue
+
+  /// The adaptive ladder, ascending by height, paired with the menu option
+  /// that selects each rung.
+  List<({AbrLevel level, QualityOption option})> _ladder() {
+    if (!abrConfig.enabled) return const [];
+    if (_renditions != null && !abrConfig.allowRenditionSwitching) {
+      return const [];
+    }
+    // Web HLS has hls.js's own ABR; don't fight it.
+    if (webHlsLevels().isNotEmpty) return const [];
+    final options = qualityOptions(validate: qualityValidate)
+        .where((o) => !o.isAuto && o.height != null)
+        .toList()
+      ..sort((a, b) => a.height!.compareTo(b.height!));
+    return [
+      for (var i = 0; i < options.length; i++)
+        (
+          level: AbrLevel(
+            index: i,
+            height: options[i].height!,
+            bitrate: options[i].track?.bitrate,
+          ),
+          option: options[i],
+        ),
+    ];
+  }
+
+  int? _currentLadderIndex() {
+    if (!_autoQuality) return null;
+    final ladder = _ladder();
+    if (ladder.isEmpty) return null;
+    final renditions = _renditions;
+    if (renditions != null) {
+      final height = renditions[
+              state.value.renditionIndex.clamp(0, renditions.length - 1)]
+          .height;
+      if (height == null) return null;
+      return _indexForHeight(ladder, height);
+    }
+    final height = state.value.selected.video.h;
+    if (height == null) return null;
+    return _indexForHeight(ladder, height);
+  }
+
+  int? _indexForHeight(
+    List<({AbrLevel level, QualityOption option})> ladder,
+    int height,
+  ) {
+    for (final entry in ladder) {
+      if (entry.level.height == height) return entry.level.index;
+    }
+    return null;
+  }
+
+  /// Picks the opening rung for a fresh source. mpv would otherwise take the
+  /// highest variant of an HLS manifest and stall its way through it.
+  void _seedStartupLevel() {
+    if (_startupLevelApplied || !_autoQuality || !abrConfig.enabled) return;
+    final ladder = _ladder();
+    if (ladder.length < 2) return;
+    _startupLevelApplied = true;
+    final target = _governor.startupLevel(
+      [for (final entry in ladder) entry.level],
+      rememberedHeight: preferredStartHeight,
+    );
+    if (target == null) return;
+    if (_currentLadderIndex() == target.index) return;
+    _applyAbrLevel(target, AbrDecision.hold);
+  }
+
+  void _applyAbrLevel(AbrLevel level, AbrDecision decision) {
+    if (_disposed) return;
+    final ladder = _ladder();
+    final entry = ladder
+        .where((e) => e.level.index == level.index)
+        .firstOrNull;
+    if (entry == null) return;
+    onAutoHeightChanged?.call(entry.level.height);
+    // Keep `_autoQuality` on — this is the governor moving, not the viewer.
+    unawaited(_applyQuality(entry.option));
+  }
+
   /// Open a source. Either a single [url] (HLS/MP4) or a list of MP4
   /// [renditions] for a manual quality menu. Optionally start at [startAt].
   Future<void> load({
@@ -315,6 +574,10 @@ class PlayoraController {
     int renditionIndex = 0,
   }) async {
     assert(url != null || (renditions?.isNotEmpty ?? false));
+    // The demuxer cache has to be sized before the first open, otherwise the
+    // stream starts on media_kit's 10 s read-ahead.
+    await ready;
+    if (_disposed) return;
     _pendingSeek = null; // a parked seek belongs to the previous source
     _renditions = renditions;
     _externalSubtitles = externalSubtitles;
@@ -328,11 +591,19 @@ class PlayoraController {
       clearError: true,
       clearExternalSubtitle: true,
     );
-    position.value = startAt ?? Duration.zero;
+    _setPosition(startAt ?? Duration.zero);
+    buffer.value = startAt ?? Duration.zero;
+    if (!_internalReload) {
+      // A genuinely new source: forget the old ladder and measurements. A
+      // rendition swap driven by the governor keeps both.
+      _startupLevelApplied = false;
+      _governor.reset();
+    }
     await player.open(
       mk.Media(target, start: startAt),
       play: play,
     );
+    _governor.start();
     final def = externalSubtitles.where((e) => e.isDefault).firstOrNull;
     if (def != null) await selectExternalSubtitle(def);
   }
@@ -341,7 +612,12 @@ class PlayoraController {
 
   Future<void> play() => player.play();
 
-  Future<void> pause() => player.pause();
+  Future<void> pause() async {
+    await player.pause();
+    // Land the exact playhead the viewer stopped at — resume points are read
+    // straight off [position].
+    _flushPosition();
+  }
 
   Future<void> togglePlay() => player.playOrPause();
 
@@ -351,7 +627,7 @@ class PlayoraController {
     final d = duration.value;
     var clamped = to < Duration.zero ? Duration.zero : to;
     if (d > Duration.zero && clamped > d) clamped = d;
-    position.value = clamped; // optimistic, keeps the scrubber snappy
+    _setPosition(clamped); // optimistic, keeps the scrubber snappy
     if (d == Duration.zero) {
       // Not ready yet (e.g. the resume banner tapped right after open) —
       // park the seek; the duration listener applies it once known.
@@ -403,6 +679,7 @@ class PlayoraController {
             renditionIndex: i,
             height: renditions[i].height,
           ),
+        if (supportsAutoQuality) const QualityOption.auto(),
       ];
     }
     // Web HLS: mpv track lists stay empty; read the hls.js levels instead.
@@ -441,11 +718,29 @@ class PlayoraController {
     ];
   }
 
-  /// Whether adaptive ("Auto") selection is active (embedded sources only).
+  /// Whether adaptive ("Auto") selection is active.
+  ///
+  /// On the native backend with the governor enabled this tracks Playora's own
+  /// auto mode: mpv itself has no ABR, it just pins the highest HLS variant.
   bool get isAutoQuality {
-    if (_renditions != null) return false;
     if (webHlsLevels().isNotEmpty) return webHlsAutoEnabled();
+    if (_renditions != null) {
+      return _autoQuality &&
+          abrConfig.enabled &&
+          abrConfig.allowRenditionSwitching;
+    }
+    if (abrConfig.enabled && mpvTuningSupported) return _autoQuality;
     return state.value.selected.video.id == 'auto';
+  }
+
+  /// Whether the "Auto" entry should be offered at all. Manual MP4 renditions
+  /// only get one when the governor is allowed to swap between them.
+  bool get supportsAutoQuality {
+    if (webHlsLevels().isNotEmpty) return true;
+    if (_renditions != null) {
+      return abrConfig.enabled && abrConfig.allowRenditionSwitching;
+    }
+    return true;
   }
 
   /// Index of the hls.js level currently playing (web only, -1 otherwise).
@@ -456,9 +751,11 @@ class PlayoraController {
   String get qualityLabel {
     final renditions = _renditions;
     if (renditions != null) {
+      if (isAutoQuality) return 'AUTO';
       final i = state.value.renditionIndex.clamp(0, renditions.length - 1);
       return renditions[i].qualityLabel;
     }
+    if (isAutoQuality && webHlsLevels().isEmpty) return 'AUTO';
     final webLevels = webHlsLevels();
     if (webLevels.isNotEmpty) {
       if (webHlsAutoEnabled()) return 'AUTO';
@@ -474,7 +771,20 @@ class PlayoraController {
     return v.h != null ? '${v.h}p' : 'AUTO';
   }
 
+  /// Viewer-driven selection. Picking a concrete rendition hands quality back
+  /// to the viewer; picking "Auto" hands it to the governor.
   Future<void> selectQuality(QualityOption option) async {
+    _autoQuality = option.isAuto;
+    if (option.isAuto && abrConfig.enabled && webHlsLevels().isEmpty) {
+      _governor.reset();
+      _startupLevelApplied = false;
+      _seedStartupLevel();
+      return;
+    }
+    await _applyQuality(option);
+  }
+
+  Future<void> _applyQuality(QualityOption option) async {
     if (option.renditionIndex != null) {
       final renditions = _renditions;
       if (renditions == null) return;
@@ -485,13 +795,18 @@ class PlayoraController {
       final wasPlaying = state.value.playing;
       final subs = _externalSubtitles;
       final active = state.value.activeExternalSubtitle;
-      await load(
-        renditions: renditions,
-        externalSubtitles: subs,
-        renditionIndex: index,
-        startAt: at,
-        play: wasPlaying,
-      );
+      _internalReload = true;
+      try {
+        await load(
+          renditions: renditions,
+          externalSubtitles: subs,
+          renditionIndex: index,
+          startAt: at,
+          play: wasPlaying,
+        );
+      } finally {
+        _internalReload = false;
+      }
       if (active != null) await selectExternalSubtitle(active);
       return;
     }
@@ -583,6 +898,8 @@ class PlayoraController {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _governor.dispose();
+    _positionFlush?.cancel();
     for (final sub in _subs) {
       await sub.cancel();
     }
@@ -594,6 +911,7 @@ class PlayoraController {
     position.dispose();
     duration.dispose();
     buffer.dispose();
+    bufferingPercent.dispose();
     subtitleCues.dispose();
     await player.dispose();
   }

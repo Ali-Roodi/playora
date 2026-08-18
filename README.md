@@ -21,7 +21,9 @@ playlists & seasons · optional analytics + resume · Persian (RTL) & English ou
 
 ## Features
 
-- **HLS + MP4** — adaptive HLS (auto quality from the manifest) or progressive MP4. Pass a list of MP4 renditions for a manual quality menu.
+- **HLS + MP4** — adaptive HLS or progressive MP4. Pass a list of MP4 renditions for a manual quality menu.
+- **Real adaptive quality** — mpv itself never switches HLS variants (it pins the highest one and buffers), so Playora runs its own governor: it measures how fast media actually arrives and steps the quality down when the buffer drains, back up when the link proves headroom.
+- **Buffers deep** — reads ahead for as long as the byte cap allows (often the rest of the episode) with a disk-backed cache, long network timeouts and transparent HTTP reconnects, so a weak connection doesn't stall playback.
 - **Custom skin** — dark, gold-accented, light mode, RTL/LTR, responsive. Layout stays physical; RTL only right-aligns text (like YouTube).
 - **Quality / speed / subtitles / audio menus** — embedded HLS subtitle and multi-language audio tracks are detected automatically; add external WebVTT/SRT subtitles on top. `qualityValidate` hides unwanted renditions.
 - **Scrub previews** — WebVTT thumbnail tracks (individual images or `#xywh` sprite sheets).
@@ -31,7 +33,7 @@ playlists & seasons · optional analytics + resume · Persian (RTL) & English ou
 - **Fullscreen** — route-based fullscreen with automatic landscape orientation + immersive mode on mobile.
 - **Overlays** — like button (controllable), transient info badge, operator notice banner, blocking IP/network restriction with retry/exit.
 - **VOD providers** — `vodType` exchanges an opaque play token for the real stream URL via a provider API (ABR Hamrahi, Poyan), so existing back-ends keep working.
-- **Optional analytics + resume** — canonical events to your ingest endpoint (batched, retried, heartbeats) and a "continue watching" banner. Or drive resume from your own back-end with `resolveResume`, and report a watch heartbeat to your current tracker with `onWatchInterval`.
+- **Optional analytics + resume** — canonical events to your ingest endpoint (batched, retried, heartbeats) and a "continue watching" banner, or auto-resume straight at the saved position (`resumeMode`). Drive it from your own back-end with `resolveResume`, and report a watch heartbeat to your current tracker with `onWatchInterval`.
 - **Persistence** — remember volume/mute/speed/brightness across sessions (`persistSettings`).
 - **fa / en built in** — Persian digits, RTL text, overridable strings.
 
@@ -149,6 +151,57 @@ PlayoraPlayer(
 )
 ```
 
+## Weak connections
+
+Two independent knobs, both on by default.
+
+```dart
+PlayoraPlayer(
+  src: src,
+  // How far ahead to pre-load. aggressive() (the default) keeps downloading
+  // for as long as the byte cap allows — usually the rest of the episode.
+  buffering: const PlayoraBufferConfig.aggressive(), // or .balanced() / .minimal()
+
+  // Adaptive quality. mpv has no ABR of its own, this is what makes "Auto"
+  // adapt: it steps down when the buffer drains or playback stalls, and back
+  // up once the connection has proven headroom.
+  abr: const PlayoraAbrConfig(
+    startupHeightCeiling: 720,  // where a fresh session opens; null = the top
+    minBufferAhead: Duration(seconds: 8),
+    upshiftBufferAhead: Duration(seconds: 30),
+  ),
+)
+```
+
+The cache is backed by a file in the app's temp directory when one is
+writable — that is what allows the cap to be large without costing RAM.
+Without one it falls back to a smaller, RAM-safe cap automatically.
+
+With `persistSettings: true` the height the governor settled on is remembered,
+so the next session opens there instead of probing up again.
+
+Set `abr: const PlayoraAbrConfig(enabled: false)` to hand quality selection
+back to mpv, and `buffering: const PlayoraBufferConfig.minimal()` to return to
+media_kit's stock cache.
+
+## Continue watching
+
+```dart
+PlayoraPlayer(
+  src: src,
+  resume: true,
+  resumeMode: PlayerResumeMode.auto, // open at the saved position
+  resolveResume: () async => ResumePoint(position: savedPosition),
+)
+```
+
+`PlayerResumeMode.prompt` (the default) starts at zero and shows a banner the
+viewer has to tap. Note that if they ignore it, the watch heartbeat reports
+the *new* near-zero position and the saved one is lost — which is why a
+half-watched title can come back playing from the start. `auto` resolves the
+point before the first `open()` and hands it to mpv as the start position, and
+turns the card into a "start over" offer.
+
 ## Theming & i18n
 
 ```dart
@@ -176,6 +229,10 @@ PlayoraPlayer(
 | `ad` / `ads` | `AdConfig` / `List<AdBreak>` | Pre-roll shorthand, or breaks at pre/post/`AdOffset.at(...)`. |
 | `notice` / `restriction` / `badge` | — | Operator notice, blocking overlay, transient info pill. |
 | `analytics` / `resume` / `resolveResume` | — | Built-in analytics, resume banner, host-driven resume. |
+| `resumeMode` | `PlayerResumeMode` | `prompt` (banner) or `auto` (open at the saved position). |
+| `buffering` | `PlayoraBufferConfig` | Read-ahead, cache caps, network timeouts, reconnects. |
+| `abr` | `PlayoraAbrConfig` | Adaptive quality governor: thresholds, cooldowns, on/off. |
+| `debugLogging` | `bool` | Print `[playora]` diagnostics for resume/load/ABR. |
 | `onWatchInterval` / `watchInterval` | — | External watch heartbeat + cadence (default 5s). |
 | `onPlayerReady` | `ValueChanged<PlayoraController?>` | Imperative control (seek, pause, tracks, …). |
 | `persistSettings` / `settingsKey` | `bool` / `String` | Remember volume/mute/speed/brightness. |

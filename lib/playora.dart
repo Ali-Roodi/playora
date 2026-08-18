@@ -10,6 +10,10 @@ library;
 
 export 'src/analytics/client.dart' show LogplexAnalyticsClient;
 export 'src/analytics/watch_interval.dart' show WatchIntervalReporter;
+export 'src/core/abr.dart'
+    show AbrDecision, AbrLevel, PlayoraAbrConfig, PlayoraAbrGovernor;
+export 'src/core/buffering.dart'
+    show PlayoraBufferConfig, PlayoraBufferProfile;
 export 'src/core/controller.dart'
     show
         AudioOption,
@@ -49,6 +53,7 @@ export 'src/models/types.dart'
         PlayerLocale,
         PlayerNotice,
         PlayerRestriction,
+        PlayerResumeMode,
         VideoSource,
         VodProvider;
 export 'src/theme/player_theme.dart' show PlayoraTheme;

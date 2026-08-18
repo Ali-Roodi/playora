@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../i18n/strings.dart';
@@ -11,6 +12,7 @@ class LoadingSpinner extends StatelessWidget {
     required this.theme,
     required this.strings,
     this.scrim = false,
+    this.progress,
   });
 
   final PlayoraTheme theme;
@@ -18,6 +20,11 @@ class LoadingSpinner extends StatelessWidget {
 
   /// Draw over a dimming layer (host/provider loading above the cover).
   final bool scrim;
+
+  /// Refill progress 0..100 while the backend recovers from an underrun.
+  /// Shown under the label so a stall on a weak link reads as progress
+  /// rather than as a frozen player.
+  final ValueListenable<double>? progress;
 
   @override
   Widget build(BuildContext context) {
@@ -42,6 +49,27 @@ class LoadingSpinner extends StatelessWidget {
               shadows: [Shadow(color: Colors.black87, blurRadius: 8)],
             ),
           ),
+          if (progress != null)
+            ValueListenableBuilder<double>(
+              valueListenable: progress!,
+              builder: (context, value, _) {
+                if (value <= 0 || value >= 100) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '${value.round()}%',
+                    style: TextStyle(
+                      color: theme.textMuted,
+                      fontSize: 12,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      shadows: const [
+                        Shadow(color: Colors.black87, blurRadius: 8),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );

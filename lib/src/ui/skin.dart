@@ -55,8 +55,10 @@ class PlayerSkin extends StatefulWidget {
     this.onToggleFullscreen,
     this.fullscreenOnPlay = false,
     this.resume,
+    this.resumeIsAuto = false,
     this.onDismissResume,
     this.onResumeTap,
+    this.onRestart,
     this.liveScrubPreview = true,
     this.persistSettings = false,
     this.prefsStore,
@@ -105,12 +107,19 @@ class PlayerSkin extends StatefulWidget {
   /// Enter fullscreen when playback starts from the cover.
   final bool fullscreenOnPlay;
   final ResumePoint? resume;
+
+  /// The position was already applied — the card offers "start over" instead
+  /// of "continue".
+  final bool resumeIsAuto;
   final VoidCallback? onDismissResume;
 
   /// Resume-CTA handler. The orchestrator restarts the source at the saved
   /// position when playback hasn't started yet (early seeks are unreliable);
   /// when null, falls back to a plain seek + play.
   final ValueChanged<Duration>? onResumeTap;
+
+  /// Restart from zero ([resumeIsAuto] only).
+  final VoidCallback? onRestart;
 
   /// Live scrub preview: without a thumbnail track, dragging the scrubber
   /// pauses and seeks (throttled, keyframe-fast) so the video surface itself
@@ -354,7 +363,11 @@ class _PlayerSkinState extends State<PlayerSkin> {
         // Buffering — outside the fading controls so it always shows.
         if (state.buffering || !state.canPlay)
           Positioned.fill(
-            child: LoadingSpinner(theme: theme, strings: strings),
+            child: LoadingSpinner(
+              theme: theme,
+              strings: strings,
+              progress: controller.bufferingPercent,
+            ),
           ),
 
         // Persistent mute badge while controls are hidden.
@@ -378,14 +391,17 @@ class _PlayerSkinState extends State<PlayerSkin> {
             onDone: () => setState(() => _doneBadge = widget.badge),
           ),
 
-        // Fading controls layer.
+        // Fading controls layer. Boxed off so the scrubber's per-tick repaint
+        // never reaches the video texture underneath.
         Positioned.fill(
-          child: IgnorePointer(
-            ignoring: !visible,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: visible ? 1 : 0,
-              child: _controls(state, isMuted),
+          child: RepaintBoundary(
+            child: IgnorePointer(
+              ignoring: !visible,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 200),
+                opacity: visible ? 1 : 0,
+                child: _controls(state, isMuted),
+              ),
             ),
           ),
         ),
@@ -632,7 +648,8 @@ class _PlayerSkinState extends State<PlayerSkin> {
 
   Widget _resumeCard() {
     final resume = widget.resume!;
-    final minute = resume.position.inMinutes;
+    final auto = widget.resumeIsAuto;
+    final at = formatDuration(resume.position);
     return Align(
       alignment: Alignment.center,
       child: Container(
@@ -655,7 +672,7 @@ class _PlayerSkinState extends State<PlayerSkin> {
               children: [
                 Expanded(
                   child: Text(
-                    strings.resumeTitle,
+                    auto ? strings.resumedTitle : strings.resumeTitle,
                     textDirection: widget.textDirection,
                     style: TextStyle(
                       color: theme.text,
@@ -677,7 +694,7 @@ class _PlayerSkinState extends State<PlayerSkin> {
               ],
             ),
             Text(
-              strings.resumeMessage,
+              auto ? strings.resumedMessage : strings.resumeMessage,
               textDirection: widget.textDirection,
               style: TextStyle(color: theme.textMuted, fontSize: 12.5),
             ),
@@ -685,7 +702,14 @@ class _PlayerSkinState extends State<PlayerSkin> {
             Center(
               child: FilledButton(
                 onPressed: () {
-                  if (widget.onResumeTap != null) {
+                  if (auto) {
+                    if (widget.onRestart != null) {
+                      widget.onRestart!();
+                    } else {
+                      controller.seek(Duration.zero);
+                      controller.play();
+                    }
+                  } else if (widget.onResumeTap != null) {
                     widget.onResumeTap!(resume.position);
                   } else {
                     controller.seek(resume.position);
@@ -698,7 +722,10 @@ class _PlayerSkinState extends State<PlayerSkin> {
                   foregroundColor: theme.accentContrast,
                 ),
                 child: Text(
-                  '${strings.resumeCta} ${localeDigits(widget.locale, minute)}',
+                  auto
+                      ? strings.restartCta
+                      : '${strings.resumeCta} '
+                          '${localeDigits(widget.locale, at)}',
                   textDirection: widget.textDirection,
                   style: const TextStyle(
                     fontSize: 13,
@@ -916,7 +943,7 @@ class _PlayerSkinState extends State<PlayerSkin> {
             selected: option.isAuto
                 ? isAuto
                 : option.renditionIndex != null
-                ? option.renditionIndex == state.renditionIndex
+                ? !isAuto && option.renditionIndex == state.renditionIndex
                 : option.hlsLevelIndex != null
                 ? !isAuto && option.hlsLevelIndex == controller.activeHlsLevel
                 : !isAuto && option.track?.id == current.id,

@@ -30,6 +30,9 @@ class PlayerStrings {
     required this.resumeTitle,
     required this.resumeMessage,
     required this.resumeCta,
+    required this.resumedTitle,
+    required this.resumedMessage,
+    required this.restartCta,
     required this.dismiss,
     required this.skipAd,
     required this.adLabel,
@@ -71,6 +74,12 @@ class PlayerStrings {
 
   /// Resume button prefix; the minute is appended (e.g. "مشاهده از دقیقه ۳۲").
   final String resumeCta;
+
+  /// Shown when playback already resumed by itself
+  /// ([PlayerResumeMode.auto]).
+  final String resumedTitle;
+  final String resumedMessage;
+  final String restartCta;
   final String dismiss;
   final String skipAd;
   final String adLabel;
@@ -107,7 +116,10 @@ class PlayerStrings {
     playlist: 'لیست پخش',
     resumeTitle: 'ادامه پخش',
     resumeMessage: 'شما این فیلم/سریال رو از گذشته مشاهده کردی',
-    resumeCta: 'مشاهده از دقیقه',
+    resumeCta: 'ادامه از',
+    resumedTitle: 'از ادامه پخش شد',
+    resumedMessage: 'از همان‌جایی که رها کردید ادامه یافت',
+    restartCta: 'پخش از ابتدا',
     dismiss: 'بستن',
     skipAd: 'رد کردن آگهی',
     adLabel: 'آگهی',
@@ -145,7 +157,10 @@ class PlayerStrings {
     playlist: 'Playlist',
     resumeTitle: 'Continue watching',
     resumeMessage: 'You already watched part of this',
-    resumeCta: 'Resume from minute',
+    resumeCta: 'Resume from',
+    resumedTitle: 'Resumed',
+    resumedMessage: 'Picked up where you left off',
+    restartCta: 'Start from the beginning',
     dismiss: 'Dismiss',
     skipAd: 'Skip ad',
     adLabel: 'Ad',
@@ -170,8 +185,8 @@ TextDirection dirFor(PlayerLocale locale, TextDirection? override) {
   return locale == PlayerLocale.fa ? TextDirection.rtl : TextDirection.ltr;
 }
 
-/// Format a number in the locale's digits (fa → Persian digits).
-String localeDigits(PlayerLocale locale, int value) {
+/// Format a value in the locale's digits (fa → Persian digits).
+String localeDigits(PlayerLocale locale, Object value) {
   final s = '$value';
   if (locale != PlayerLocale.fa) return s;
   const western = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];

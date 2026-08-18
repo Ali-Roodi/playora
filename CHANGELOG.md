@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.5.0
+
+Playback on weak connections, and the "continue watching" position.
+
+### Buffering
+
+- The demuxer cache is now sized by Playora instead of media_kit's stock
+  10 s / 32 MB. `PlayoraBufferConfig.aggressive()` (the new default) reads
+  ahead for as long as the byte cap allows — typically the rest of the
+  episode — so a dip in the connection no longer stalls playback.
+- When a writable temp directory is available the cache is backed by a file
+  on disk, which is what lets the cap be large; writability is verified up
+  front, because mpv silently keeps the whole cache in RAM when `cache-dir`
+  is not writable. Without one, the cap falls back to a RAM-safe value.
+- `network-timeout` goes from 5 s to 30 s and libavformat is asked to
+  transparently reconnect dropped HTTP connections — a brief loss of signal
+  resumes instead of erroring.
+- Playback holds at the start until a second of media is cached
+  (`cache-pause-initial`) instead of starting and stalling immediately.
+- Pick a different trade-off with `PlayoraPlayer.buffering`:
+  `PlayoraBufferConfig.balanced()` or `.minimal()` (the old behaviour).
+- The buffering spinner shows the refill percentage.
+
+### Adaptive quality
+
+- **"Auto" now actually adapts on the native backends.** mpv has no ABR of
+  its own — for an HLS master playlist it pins the highest variant
+  (`--hls-bitrate=max`) and buffers forever on a slow link. A new governor
+  measures how many seconds of media arrive per second of wall clock and
+  steps the quality down when the buffer drains or playback stalls, and back
+  up once the connection has proven headroom. Tune (or disable) it with
+  `PlayoraPlayer.abr`.
+- A fresh session opens at 720p or below and ramps up, so playback starts
+  fast; with `persistSettings: true` the height the governor settled on is
+  remembered for the next session.
+- Manual MP4 rendition lists get an "Auto" entry too, opt in with
+  `PlayoraAbrConfig(allowRenditionSwitching: true)` — off by default because
+  swapping files reloads the media.
+
+### Continue watching
+
+- New `resumeMode: PlayerResumeMode.auto` opens the media *at* the saved
+  position instead of starting at zero and waiting for a banner tap. In
+  `prompt` mode (still the default) an ignored banner lets the watch
+  heartbeat overwrite the stored position with the new near-zero one — which
+  is why a half-watched title could come back playing from the start.
+  In auto mode the card becomes a "start over" offer.
+- The resume CTA shows `m:ss` rather than a bare minute count (a resume at
+  45 s used to read "from minute 0").
+- `PlayoraPlayer.debugLogging` prints `[playora]` diagnostics for the resume,
+  load and adaptive-quality paths.
+
+### Performance
+
+- mpv reports the playhead once per frame; those updates are now coalesced to
+  ~5/s, so the scrubber and clock no longer rebuild 25–60 times a second.
+- The video surface widget is cached and wrapped in a `RepaintBoundary`, and
+  the control layer has one of its own — the scrubber's repaint no longer
+  reaches the video texture, and state changes no longer re-create the
+  texture widget.
+
 ## 0.4.1
 
 - Fullscreen controls (skin, ad UI, overlays) now sit inside a SafeArea so
