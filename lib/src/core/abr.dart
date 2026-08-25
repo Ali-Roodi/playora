@@ -25,6 +25,7 @@ class PlayoraAbrConfig {
     this.upshiftCooldown = const Duration(seconds: 5),
     this.downshiftCooldown = const Duration(seconds: 4),
     this.switchSettleTime = const Duration(seconds: 3),
+    this.startupGrace = const Duration(seconds: 5),
     this.upshiftGoodTicks = 2,
     this.headroom = 1.15,
     this.allowRenditionSwitching = false,
@@ -59,6 +60,12 @@ class PlayoraAbrConfig {
   /// wait longer because they are the risky direction.
   final Duration upshiftCooldown;
   final Duration downshiftCooldown;
+
+  /// Grace period after playback first starts during which the down branch is
+  /// off entirely. Opening a source *is* a stall — mpv holds the picture until
+  /// `cache-pause-initial` is satisfied — and reading that as a failing link
+  /// drops the viewer a rung or two before the first frame has even settled.
+  final Duration startupGrace;
 
   /// Grace period after a switch during which a stall is read as the new rung
   /// filling its cache rather than as the link failing. Without it the switch
@@ -154,6 +161,11 @@ class PlayoraAbrGovernor {
   /// Sustained-good counter, so one lucky sample can't trigger an up-shift.
   int _goodTicks = 0;
 
+  /// When playback first got going for the current source. Everything before
+  /// that plus [PlayoraAbrConfig.startupGrace] is the stream opening, not the
+  /// link struggling.
+  DateTime? _playingSince;
+
   void start() {
     if (!config.enabled || _timer != null) return;
     _timer = Timer.periodic(config.probeInterval, (_) => _tick());
@@ -171,6 +183,7 @@ class PlayoraAbrGovernor {
     _lastSwitchAt = null;
     _fillRate = 1.0;
     _goodTicks = 0;
+    _playingSince = null;
   }
 
   void dispose() => stop();
@@ -225,6 +238,7 @@ class PlayoraAbrGovernor {
     }
 
     if (!isPlaying) return;
+    _playingSince ??= now;
 
     final safeIndex = index.clamp(0, ladder.length - 1);
     final current = ladder[safeIndex];
@@ -236,13 +250,19 @@ class PlayoraAbrGovernor {
     // own tail all the way to the bottom rung.
     final settling =
         sinceSwitch != null && sinceSwitch < config.switchSettleTime;
+    // Opening a source looks identical to a failing one: an empty cache, a
+    // held picture, no throughput history. Judging it costs the viewer a rung
+    // before the first frame has settled.
+    final startingUp = now.difference(_playingSince!) < config.startupGrace;
 
     // ---- down ------------------------------------------------------------
     // A buffer under the floor is only survivable if it is visibly refilling;
     // "exactly keeping up" leaves nothing for the next dip.
     final starving = buffered < config.minBufferAhead;
     final losing =
-        (stalled() && !settling) || (starving && _fillRate < _recoveryHeadroom);
+        !startingUp &&
+        ((stalled() && !settling) ||
+            (starving && _fillRate < _recoveryHeadroom));
     if (losing && safeIndex > 0) {
       if (sinceSwitch == null || sinceSwitch >= config.downshiftCooldown) {
         _goodTicks = 0;

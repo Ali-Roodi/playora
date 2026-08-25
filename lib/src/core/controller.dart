@@ -820,6 +820,10 @@ class PlayoraController {
   /// Viewer-driven selection. Picking a concrete rendition hands quality back
   /// to the viewer; picking "Auto" hands it to the governor.
   Future<void> selectQuality(QualityOption option) async {
+    // A viewer-driven switch re-buffers exactly like a governor-driven one, so
+    // hide it the same way. Before the first frame there is nothing to hold on
+    // screen and the spinner is the honest answer.
+    if (state.value.started) _beginQualitySwitch();
     _autoQuality = option.isAuto;
     if (option.isAuto && abrConfig.enabled && webHlsLevels().isEmpty) {
       _governor.reset();

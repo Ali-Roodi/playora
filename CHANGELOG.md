@@ -20,6 +20,14 @@ Quality switching you don't notice, and a much faster climb to the top rung.
 - **A stall inside `switchSettleTime` (3 s) of a switch is read as the new
   rung filling its cache, not as the link failing.** Without this the switch
   looked like trouble and the governor chased its own tail downwards.
+- **The stall that opens a source no longer costs a rung.** mpv holds the
+  picture until `cache-pause-initial` is satisfied, on an empty cache with no
+  throughput history — indistinguishable from a failing link, and the governor
+  duly dropped a rung or two before the first frame had settled. The new
+  `startupGrace` (5 s, measured from playback actually running) turns the down
+  branch off until the stream has had a chance to open.
+- A viewer-driven quality pick hides its re-buffer the same way a
+  governor-driven one does.
 - **Defaults are retuned for quality first**, on the assumption that bandwidth
   is cheaper than a viewer watching 360p:
   - `startupHeightCeiling` now defaults to null — sessions open at the top

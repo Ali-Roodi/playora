@@ -11,6 +11,9 @@ class _Harness {
       probeInterval: Duration(seconds: 2),
       upshiftCooldown: Duration.zero,
       downshiftCooldown: Duration.zero,
+      // Most cases are about a stream already running; the opening grace is
+      // exercised on its own below.
+      startupGrace: Duration.zero,
     ),
   }) : levels = [
           for (var i = 0; i < heights.length; i++)
@@ -152,6 +155,7 @@ void main() {
           upshiftCooldown: Duration.zero,
           downshiftCooldown: Duration.zero,
           switchSettleTime: Duration(milliseconds: 100),
+          startupGrace: Duration.zero,
         ),
       )..buffered = const Duration(seconds: 200);
       await h.tick(times: 2);
@@ -159,6 +163,23 @@ void main() {
       h.stalled = true;
       await h.tick(times: 2);
       expect(h.switches.last.decision, AbrDecision.down);
+    });
+
+    test('the stall that opens a source does not cost a rung', () async {
+      // mpv holds the picture until `cache-pause-initial` is satisfied, on an
+      // empty cache with no throughput history yet. That is indistinguishable
+      // from a failing link, and judging it drops the viewer a rung before the
+      // first frame has settled.
+      final h = _Harness(
+        config: const PlayoraAbrConfig(
+          upshiftCooldown: Duration.zero,
+          downshiftCooldown: Duration.zero,
+        ),
+      )
+        ..buffered = Duration.zero
+        ..stalled = true;
+      await h.tick(times: 3);
+      expect(h.switches, isEmpty);
     });
     test('does not act while paused', () async {
       final h = _Harness()
