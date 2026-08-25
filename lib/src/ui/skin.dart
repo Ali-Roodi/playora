@@ -360,8 +360,10 @@ class _PlayerSkinState extends State<PlayerSkin> {
         // Subtitle cues — lifted above the bar when controls show.
         _captions(visible),
 
-        // Buffering — outside the fading controls so it always shows.
-        if (state.buffering || !state.canPlay)
+        // Buffering — outside the fading controls so it always shows. A
+        // governor-driven quality switch re-buffers by design; a spinner for
+        // that reads as a dropout, so hold the last frame through it instead.
+        if ((state.buffering || !state.canPlay) && !state.switchingQuality)
           Positioned.fill(
             child: LoadingSpinner(
               theme: theme,

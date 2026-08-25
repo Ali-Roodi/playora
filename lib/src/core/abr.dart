@@ -8,17 +8,25 @@ import 'package:flutter/foundation.dart';
 /// (`--hls-bitrate=max`, i.e. the highest) and stays there, so a viewer whose
 /// connection degrades just buffers forever. [PlayoraAbrGovernor] adds the
 /// missing feedback loop on top of the regular track selection.
+///
+/// The defaults are tuned for *quality first*: bandwidth is assumed to be
+/// cheap, so the governor opens at the top rung, climbs back to it as soon as
+/// the measurement allows, and spends its patience on avoiding visible
+/// switches rather than on saving traffic.
 @immutable
 class PlayoraAbrConfig {
   const PlayoraAbrConfig({
     this.enabled = true,
-    this.startupHeightCeiling = 720,
-    this.minBufferAhead = const Duration(seconds: 8),
-    this.upshiftBufferAhead = const Duration(seconds: 30),
-    this.probeInterval = const Duration(seconds: 2),
-    this.upshiftCooldown = const Duration(seconds: 20),
-    this.downshiftCooldown = const Duration(seconds: 8),
-    this.headroom = 1.3,
+    this.startupHeightCeiling,
+    this.minBufferAhead = const Duration(seconds: 6),
+    this.upshiftBufferAhead = const Duration(seconds: 12),
+    this.runwayBufferAhead = const Duration(seconds: 60),
+    this.probeInterval = const Duration(seconds: 1),
+    this.upshiftCooldown = const Duration(seconds: 5),
+    this.downshiftCooldown = const Duration(seconds: 4),
+    this.switchSettleTime = const Duration(seconds: 3),
+    this.upshiftGoodTicks = 2,
+    this.headroom = 1.15,
     this.allowRenditionSwitching = false,
   });
 
@@ -26,14 +34,23 @@ class PlayoraAbrConfig {
   final bool enabled;
 
   /// Cap for the very first pick of a session, before any measurement exists.
-  /// Null starts at the top rendition.
+  /// Null — the default — starts at the top rendition and lets the governor
+  /// walk down if the link cannot hold it.
   final int? startupHeightCeiling;
 
-  /// Below this much buffered-ahead media, the governor may step down.
+  /// Below this much buffered-ahead media, the governor may step down. It sits
+  /// well above zero on purpose: the point is to act *before* mpv's
+  /// `cache-pause` freezes the picture, not after.
   final Duration minBufferAhead;
 
   /// Above this much buffered-ahead media, the governor may step up.
   final Duration upshiftBufferAhead;
+
+  /// Buffer depth that counts as runway. Past it an over-optimistic jump costs
+  /// nothing — there is a full minute of media to retreat through before the
+  /// viewer could see a stall — so the governor takes the top rung outright
+  /// instead of asking the fill rate for permission.
+  final Duration runwayBufferAhead;
 
   /// How often the loop samples buffer/throughput.
   final Duration probeInterval;
@@ -43,7 +60,16 @@ class PlayoraAbrConfig {
   final Duration upshiftCooldown;
   final Duration downshiftCooldown;
 
-  /// Extra measured throughput required before stepping up (1.3 = 30 %).
+  /// Grace period after a switch during which a stall is read as the new rung
+  /// filling its cache rather than as the link failing. Without it the switch
+  /// itself looks like trouble and the governor chases its own tail.
+  final Duration switchSettleTime;
+
+  /// Consecutive good samples required before stepping up, so one lucky tick
+  /// cannot trigger a switch.
+  final int upshiftGoodTicks;
+
+  /// Extra measured throughput required before stepping up (1.15 = 15 %).
   final double headroom;
 
   /// Whether the governor may also switch between manual MP4 renditions.
@@ -202,19 +228,33 @@ class PlayoraAbrGovernor {
 
     final safeIndex = index.clamp(0, ladder.length - 1);
     final current = ladder[safeIndex];
-    final sinceSwitch =
-        _lastSwitchAt == null ? null : now.difference(_lastSwitchAt!);
+    final sinceSwitch = _lastSwitchAt == null
+        ? null
+        : now.difference(_lastSwitchAt!);
+    // Every switch costs a beat of re-buffering while the new rung fills its
+    // cache. Reading that as a failing link would make the governor chase its
+    // own tail all the way to the bottom rung.
+    final settling =
+        sinceSwitch != null && sinceSwitch < config.switchSettleTime;
 
     // ---- down ------------------------------------------------------------
     // A buffer under the floor is only survivable if it is visibly refilling;
     // "exactly keeping up" leaves nothing for the next dip.
     final starving = buffered < config.minBufferAhead;
-    final losing = stalled() || (starving && _fillRate < _recoveryHeadroom);
+    final losing =
+        (stalled() && !settling) || (starving && _fillRate < _recoveryHeadroom);
     if (losing && safeIndex > 0) {
       if (sinceSwitch == null || sinceSwitch >= config.downshiftCooldown) {
         _goodTicks = 0;
+        // Drop straight onto the rung the link can actually carry. Walking
+        // down one step at a time on a collapsed connection means one visible
+        // switch per step; this costs exactly one.
+        final target = _affordableIndex(
+          ladder,
+          current,
+        ).clamp(0, safeIndex - 1);
         _switch(
-          ladder[safeIndex - 1],
+          ladder[target],
           AbrDecision.down,
           'buffer=${buffered.inSeconds}s fill=${_fillRate.toStringAsFixed(2)}',
         );
@@ -227,30 +267,48 @@ class PlayoraAbrGovernor {
       _goodTicks = 0;
       return;
     }
-    // A cache that is full (or a whole video ahead) stops growing, so the
-    // fill rate reads ~1 even on a fast link. Treat a deep buffer as proof of
-    // headroom on its own.
-    final saturated = buffered >= config.upshiftBufferAhead * 4;
     if (buffered < config.upshiftBufferAhead) {
       _goodTicks = 0;
       return;
     }
-    final next = ladder[safeIndex + 1];
-    final needed = (next.weight / current.weight) * config.headroom;
-    if (!saturated && _fillRate < needed) {
+    // Two ways to earn the climb. A cache that is full (or a whole video
+    // ahead) stops growing, so the fill rate reads ~1 even on a fast link —
+    // but that much runway also means an over-optimistic jump can be undone
+    // long before the viewer notices, so take the top rung on the spot.
+    // Otherwise ask the measurement how far up it can carry us.
+    final target = buffered >= config.runwayBufferAhead
+        ? ladder.length - 1
+        : _affordableIndex(ladder, current);
+    if (target <= safeIndex) {
       _goodTicks = 0;
       return;
     }
     _goodTicks++;
-    if (_goodTicks < 3) return;
+    if (_goodTicks < config.upshiftGoodTicks) return;
     if (sinceSwitch != null && sinceSwitch < config.upshiftCooldown) return;
     _goodTicks = 0;
     _switch(
-      next,
+      ladder[target],
       AbrDecision.up,
-      'buffer=${buffered.inSeconds}s fill=${_fillRate.toStringAsFixed(2)} '
-      'needed=${needed.toStringAsFixed(2)}',
+      'buffer=${buffered.inSeconds}s fill=${_fillRate.toStringAsFixed(2)}',
     );
+  }
+
+  /// The highest rung the measured fill rate can carry, with
+  /// [PlayoraAbrConfig.headroom] to spare.
+  ///
+  /// A fill rate of 2 means the connection delivers [current] twice as fast as
+  /// it plays, so a rung costing up to ~2x as much would still keep up. The
+  /// answer is an absolute ladder index, not a step: the governor moves to the
+  /// right rung in one go rather than climbing a staircase of visible
+  /// switches.
+  int _affordableIndex(List<AbrLevel> ladder, AbrLevel current) {
+    final budget = current.weight * (_fillRate / config.headroom);
+    var best = 0;
+    for (var i = 0; i < ladder.length; i++) {
+      if (ladder[i].weight <= budget) best = i;
+    }
+    return best;
   }
 
   void _switch(AbrLevel level, AbrDecision decision, String why) {

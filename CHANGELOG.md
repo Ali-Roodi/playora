@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.6.0
+
+Quality switching you don't notice, and a much faster climb to the top rung.
+
+### Adaptive quality
+
+- **The governor now moves to the right rung in one switch instead of
+  climbing a staircase.** Up- and down-shifts both resolve an absolute target
+  from the measured fill rate, so 360p → 1080p is a single switch rather than
+  four, and a collapsed link drops straight to what it can carry rather than
+  losing a rung at a time. Every switch costs the viewer a beat of
+  re-buffering, so the cheapest switch is the one that isn't needed.
+- **A switch no longer shows the buffering spinner.** Re-buffering is what a
+  switch *is*; painting the full-screen spinner over it read as the stream
+  dropping out. `PlaybackValue.switchingQuality` marks the window and the skin
+  holds the last frame through it, with a timeout so a genuine stall still
+  surfaces.
+- **A stall inside `switchSettleTime` (3 s) of a switch is read as the new
+  rung filling its cache, not as the link failing.** Without this the switch
+  looked like trouble and the governor chased its own tail downwards.
+- **Defaults are retuned for quality first**, on the assumption that bandwidth
+  is cheaper than a viewer watching 360p:
+  - `startupHeightCeiling` now defaults to null — sessions open at the top
+    rung and walk down only if the link can't hold it (was: capped at 720p).
+  - `upshiftBufferAhead` 30 s → 12 s, `upshiftCooldown` 20 s → 5 s,
+    `probeInterval` 2 s → 1 s, `headroom` 1.3 → 1.15. The climb starts sooner
+    and reacts twice as fast.
+  - New `runwayBufferAhead` (60 s): past a minute of banked media an
+    over-optimistic jump costs nothing — there is a full minute to retreat
+    through before the viewer could see a stall — so the governor takes the
+    top rung outright instead of asking the fill rate for permission.
+  - `minBufferAhead` 8 s → 6 s and `downshiftCooldown` 8 s → 4 s: act before
+    mpv's `cache-pause` freezes the picture, not after.
+  - New `upshiftGoodTicks` (2) replaces the hard-coded 3.
+
+### Buffering
+
+- `PlayoraBufferConfig.aggressive()` spends more freely: the disk-backed cache
+  cap goes 512 MB → 1 GB, the back-buffer 32 MB → 64 MB (instant backward
+  seeks), and `stream-buffer-size` 1 MB → 4 MB. The RAM cap is unchanged — a
+  deep cache is what lets the governor climb early and retreat invisibly.
+
+
 ## 0.5.0
 
 Playback on weak connections, and the "continue watching" position.

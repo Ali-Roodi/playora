@@ -15,7 +15,8 @@ enum PlayoraBufferProfile {
   balanced,
 
   /// Buffer as far ahead as the byte cap allows — typically the rest of an
-  /// episode. This is Playora's default.
+  /// episode. Bandwidth is spent freely here: a deep cache is what lets the
+  /// adaptive governor climb early and retreat invisibly. Playora's default.
   aggressive,
 }
 
@@ -72,12 +73,12 @@ class PlayoraBufferConfig {
   const PlayoraBufferConfig.aggressive()
       : readahead = const Duration(hours: 2),
         memoryMaxBytes = 96 * 1024 * 1024,
-        diskMaxBytes = 512 * 1024 * 1024,
-        backBytes = 32 * 1024 * 1024,
+        diskMaxBytes = 1024 * 1024 * 1024,
+        backBytes = 64 * 1024 * 1024,
         cacheOnDisk = true,
         cacheDirectory = null,
         networkTimeout = const Duration(seconds: 30),
-        streamBufferBytes = 1024 * 1024,
+        streamBufferBytes = 4 * 1024 * 1024,
         pauseUntilInitialBuffer = true,
         initialBufferWait = const Duration(seconds: 1),
         reconnect = true;

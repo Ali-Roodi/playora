@@ -100,6 +100,66 @@ void main() {
       expect(h.switches.first.height, 1080);
     });
 
+
+    test('climbs to the top in one switch instead of a staircase', () async {
+      final h = _Harness()
+        ..index = 0
+        ..buffered = const Duration(seconds: 20);
+      await h.tick();
+      // ~17 s of media arriving per second of wall clock, on a buffer that
+      // stays short of the runway rule so the fill rate is what decides.
+      for (var i = 1; i <= 3; i++) {
+        h.buffered = Duration(seconds: 20 + 5 * i);
+        await h.tick();
+      }
+      expect(h.switches, hasLength(1));
+      expect(h.switches.single.decision, AbrDecision.up);
+      expect(h.switches.single.height, 1080);
+    });
+
+    test('drops straight onto a rung the collapsed link can carry', () async {
+      final h = _Harness()
+        ..index = 3
+        ..buffered = const Duration(seconds: 14);
+      await h.tick();
+      // The buffer bleeds 2 s of media per tick: almost nothing is arriving.
+      for (final seconds in [12, 10, 8, 6, 4]) {
+        h.buffered = Duration(seconds: seconds);
+        await h.tick();
+      }
+      expect(h.switches, hasLength(1));
+      expect(h.switches.single.decision, AbrDecision.down);
+      // A staircase would have stopped at 720 and needed two more switches to
+      // get here.
+      expect(h.switches.single.height, lessThan(720));
+    });
+
+    test('a stall inside the settle window is the switch, not a failure',
+        () async {
+      final h = _Harness()..buffered = const Duration(seconds: 200);
+      await h.tick(times: 2);
+      expect(h.switches, hasLength(1), reason: 'runway buffer earns the top');
+      // The rung it just moved to is filling its cache — which mpv reports as
+      // a stall. Panicking here would undo the switch on the spot.
+      h.stalled = true;
+      await h.tick(times: 2);
+      expect(h.switches, hasLength(1));
+    });
+
+    test('a stall once the settle window has passed does step down', () async {
+      final h = _Harness(
+        config: const PlayoraAbrConfig(
+          upshiftCooldown: Duration.zero,
+          downshiftCooldown: Duration.zero,
+          switchSettleTime: Duration(milliseconds: 100),
+        ),
+      )..buffered = const Duration(seconds: 200);
+      await h.tick(times: 2);
+      expect(h.switches, hasLength(1));
+      h.stalled = true;
+      await h.tick(times: 2);
+      expect(h.switches.last.decision, AbrDecision.down);
+    });
     test('does not act while paused', () async {
       final h = _Harness()
         ..playing = false
@@ -118,7 +178,9 @@ void main() {
     });
 
     test('startupLevel honours the ceiling and the remembered height', () {
-      final h = _Harness();
+      final h = _Harness(
+        config: const PlayoraAbrConfig(startupHeightCeiling: 720),
+      );
       expect(h.governor.startupLevel(h.levels)!.height, 720);
       expect(
         h.governor.startupLevel(h.levels, rememberedHeight: 480)!.height,
@@ -132,10 +194,10 @@ void main() {
       );
     });
 
-    test('startupLevel with no ceiling opens at the top', () {
-      final h = _Harness(
-        config: const PlayoraAbrConfig(startupHeightCeiling: null),
-      );
+    test('startupLevel defaults to the top rung', () {
+      // Bandwidth is assumed cheap: open at the best rung and let the
+      // governor walk down if the link cannot hold it.
+      final h = _Harness();
       expect(h.governor.startupLevel(h.levels)!.height, 1080);
     });
 

@@ -113,6 +113,7 @@ class PlaybackValue {
     this.selected = const mk.Track(),
     this.activeExternalSubtitle,
     this.renditionIndex = 0,
+    this.switchingQuality = false,
     this.error,
   });
 
@@ -140,6 +141,13 @@ class PlaybackValue {
 
   /// Index into the manual renditions list (when the source is a list).
   final int renditionIndex;
+
+  /// True while the governor is moving to another rung of the quality ladder.
+  /// The move always costs a beat of re-buffering; the skin uses this to hold
+  /// the last frame instead of flashing a spinner, so the switch reads as
+  /// nothing happening at all.
+  final bool switchingQuality;
+
   final String? error;
 
   PlaybackValue copyWith({
@@ -158,6 +166,7 @@ class PlaybackValue {
     ExternalSubtitle? activeExternalSubtitle,
     bool clearExternalSubtitle = false,
     int? renditionIndex,
+    bool? switchingQuality,
     String? error,
     bool clearError = false,
   }) {
@@ -178,6 +187,7 @@ class PlaybackValue {
           ? null
           : (activeExternalSubtitle ?? this.activeExternalSubtitle),
       renditionIndex: renditionIndex ?? this.renditionIndex,
+      switchingQuality: switchingQuality ?? this.switchingQuality,
       error: clearError ? null : (error ?? this.error),
     );
   }
@@ -249,6 +259,9 @@ class PlayoraController {
 
   late final PlayoraAbrGovernor _governor;
   late final Future<void> _tuning;
+
+  /// Backstop that ends a quality switch the new rung never reported back on.
+  Timer? _qualitySwitchTimer;
   String? _diskCachePath;
 
   /// Resolves once the native backend has been tuned. [load] awaits it, so
@@ -359,6 +372,8 @@ class PlayoraController {
         // right away instead of on the next throttled position tick.
         if (buffering) _flushPosition();
         _update((v) => v.copyWith(buffering: buffering));
+        // The new rung has filled its cache: the switch is over.
+        if (!buffering) _endQualitySwitch();
       }),
       s.bufferingPercentage.listen((p) => bufferingPercent.value = p),
       s.completed.listen((completed) {
@@ -555,6 +570,28 @@ class PlayoraController {
     _applyAbrLevel(target, AbrDecision.hold);
   }
 
+  /// Opens the window during which a re-buffer means "the switch is working",
+  /// not "the stream died". Nothing tears the video output down, so the last
+  /// decoded frame stays on screen for its duration — the spinner is the only
+  /// thing the viewer would otherwise see, and [PlaybackValue.switchingQuality]
+  /// is what suppresses it.
+  void _beginQualitySwitch() {
+    _qualitySwitchTimer?.cancel();
+    _update((v) => v.copyWith(switchingQuality: true));
+    // Backstop: if the new rung never reports back, stop hiding a real stall.
+    _qualitySwitchTimer = Timer(
+      abrConfig.switchSettleTime + const Duration(seconds: 2),
+      _endQualitySwitch,
+    );
+  }
+
+  void _endQualitySwitch() {
+    _qualitySwitchTimer?.cancel();
+    _qualitySwitchTimer = null;
+    if (!state.value.switchingQuality) return;
+    _update((v) => v.copyWith(switchingQuality: false));
+  }
+
   void _applyAbrLevel(AbrLevel level, AbrDecision decision) {
     if (_disposed) return;
     final ladder = _ladder();
@@ -562,6 +599,9 @@ class PlayoraController {
         .where((e) => e.level.index == level.index)
         .firstOrNull;
     if (entry == null) return;
+    // The startup seed is excluded: nothing is on screen to protect yet, so
+    // the spinner there is honest.
+    if (decision != AbrDecision.hold) _beginQualitySwitch();
     onAutoHeightChanged?.call(entry.level.height);
     // Keep `_autoQuality` on — this is the governor moving, not the viewer.
     unawaited(_applyQuality(entry.option));
@@ -599,9 +639,11 @@ class PlayoraController {
     buffer.value = startAt ?? Duration.zero;
     if (!_internalReload) {
       // A genuinely new source: forget the old ladder and measurements. A
-      // rendition swap driven by the governor keeps both.
+      // rendition swap driven by the governor keeps both — including the
+      // switch window that is hiding its re-buffer.
       _startupLevelApplied = false;
       _governor.reset();
+      _endQualitySwitch();
     }
     await player.open(
       mk.Media(target, start: startAt),
@@ -903,6 +945,7 @@ class PlayoraController {
     if (_disposed) return;
     _disposed = true;
     _governor.dispose();
+    _qualitySwitchTimer?.cancel();
     _positionFlush?.cancel();
     for (final sub in _subs) {
       await sub.cancel();
