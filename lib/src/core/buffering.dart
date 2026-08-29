@@ -41,6 +41,7 @@ class PlayoraBufferConfig {
     this.reconnect = true,
     this.httpKeepAlive = true,
     this.probeDuration = const Duration(seconds: 1),
+    this.probeBytes = 512 * 1024,
   });
 
   /// Stock media_kit behaviour — no extra memory or storage pressure.
@@ -57,7 +58,8 @@ class PlayoraBufferConfig {
         initialBufferWait = const Duration(seconds: 1),
         reconnect = true,
         httpKeepAlive = true,
-        probeDuration = const Duration(seconds: 1);
+        probeDuration = const Duration(seconds: 1),
+        probeBytes = 512 * 1024;
 
   /// A few minutes of read-ahead.
   const PlayoraBufferConfig.balanced()
@@ -73,7 +75,8 @@ class PlayoraBufferConfig {
         initialBufferWait = const Duration(seconds: 1),
         reconnect = true,
         httpKeepAlive = true,
-        probeDuration = const Duration(seconds: 1);
+        probeDuration = const Duration(seconds: 1),
+        probeBytes = 512 * 1024;
 
   /// Keep downloading for as long as the byte cap allows.
   const PlayoraBufferConfig.aggressive()
@@ -89,7 +92,8 @@ class PlayoraBufferConfig {
         initialBufferWait = const Duration(seconds: 1),
         reconnect = true,
         httpKeepAlive = true,
-        probeDuration = const Duration(seconds: 1);
+        probeDuration = const Duration(seconds: 1),
+        probeBytes = 512 * 1024;
 
   factory PlayoraBufferConfig.of(PlayoraBufferProfile profile) =>
       switch (profile) {
@@ -157,6 +161,14 @@ class PlayoraBufferConfig {
   /// leaves the default alone.
   final Duration? probeDuration;
 
+  /// How much of the stream libavformat may read while analysing it.
+  ///
+  /// ffmpeg's default is 5 MB, which on an HLS ladder is several segments —
+  /// and on a phone link several seconds of black screen before the first
+  /// frame. The pair of AAC and H.264 streams an HLS segment carries is
+  /// identified in a fraction of that. Null leaves the default alone.
+  final int? probeBytes;
+
   /// The cap that applies before a disk-backed cache is confirmed. Passed to
   /// `PlayerConfiguration.bufferSize`, so it must stay RAM-safe.
   int get initialMaxBytes => memoryMaxBytes;
@@ -183,14 +195,19 @@ class PlayoraBufferConfig {
       if (probeDuration != null)
         'demuxer-lavf-analyzeduration':
             '${probeDuration!.inMilliseconds / 1000}',
+      if (probeBytes != null) 'demuxer-lavf-probesize': '$probeBytes',
       if (reconnect || httpKeepAlive)
         'stream-lavf-o': [
           if (reconnect) ...[
+            // Only a connection that drops *before* the end of the response.
+            // 'reconnect_streamed' looks like the thorough choice and is the
+            // opposite: an HLS segment is a finite file, so every single one
+            // of them ends in 'End of file', which that option reads as a
+            // dropped connection and answers with a 0/1/3 s backoff — seconds
+            // of stall on every segment boundary, all the way through the
+            // episode.
             'reconnect=1',
-            'reconnect_streamed=1',
-            'reconnect_on_network_error=1',
-            // Long backoffs read to the viewer as a frozen picture; a dropped
-            // segment is worth retrying quickly.
+            // A retry that takes half a minute reads as a frozen picture.
             'reconnect_delay_max=5',
           ],
           if (httpKeepAlive) 'multiple_requests=1',

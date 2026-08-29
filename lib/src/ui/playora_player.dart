@@ -390,6 +390,8 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     }
     WidgetsBinding.instance.addObserver(this);
     _controller = PlayoraController(
+      // mpv's own log is the only way to see where a slow open goes.
+      logLevel: widget.debugLogging ? mk.MPVLogLevel.info : null,
       buffering: widget.buffering,
       abr: widget.abr,
       videoConfiguration: widget.videoConfiguration,
@@ -694,7 +696,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       final point = await source().timeout(const Duration(seconds: 5));
       _log(
         'resume resolved: ${point == null ? 'none' : '${point.position} '
-            '(completed=${point.completed})'}',
+                  '(completed=${point.completed})'}',
       );
       return point;
     } catch (e) {
@@ -945,8 +947,10 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   /// with mpv's reliable `start:` — once playing, a plain seek.
   Future<void> _resumeFrom(Duration position) async {
     final state = _controller.state.value;
-    _log('resume tapped -> $position '
-        '(started=${state.started} canPlay=${state.canPlay})');
+    _log(
+      'resume tapped -> $position '
+      '(started=${state.started} canPlay=${state.canPlay})',
+    );
     if (state.started && state.canPlay) {
       await _controller.seek(position);
       await _controller.play();
@@ -1059,18 +1063,48 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     final cached = _cachedVideo;
     if (cached != null && _cachedVideoFit == widget.videoFit) return cached;
     _cachedVideoFit = widget.videoFit;
+    // Both engines are laid out at full size, always. A warm quality switch
+    // only moves the curtain between them: the engine taking over has been
+    // rendering into a surface of the right size all along, so there is no
+    // resize — and no black frame — at the moment it becomes the picture.
     return _cachedVideo = RepaintBoundary(
-      child: mkv.Video(
-        controller: _controller.videoController,
+      child: ListenableBuilder(
+        listenable: Listenable.merge([
+          _controller.videoOutput,
+          _controller.standbyOutput,
+        ]),
+        builder: (context, _) {
+          final standby = _controller.standbyOutput.value;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              if (standby != null)
+                Opacity(
+                  opacity: 0,
+                  child: IgnorePointer(child: _videoFor(standby)),
+                ),
+              _videoFor(_controller.videoOutput.value),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _videoFor(mkv.VideoController controller) => mkv.Video(
+        // Keyed on the engine: media_kit's Video widget takes its controller
+        // once, so a swap has to give it a new element to attach to — without
+        // this the picture stays on the engine that just stepped back, which
+        // is stopped, which is black.
+        key: ValueKey<mkv.VideoController>(controller),
+        controller: controller,
         controls: mkv.NoVideoControls,
         fit: widget.videoFit,
         fill: Colors.black,
         subtitleViewConfiguration: const mkv.SubtitleViewConfiguration(
           visible: false,
         ),
-      ),
-    );
-  }
+      );
 
   /// The full player surface (video + skin + overlays). Reused by the
   /// fullscreen route.
@@ -1165,20 +1199,29 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       ],
     );
 
-    return ColoredBox(
-      color: Colors.black,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _videoSurface,
-          // Fullscreen: the video stays full-bleed but the controls avoid
-          // the display cutout / notch.
-          if (fullscreen)
-            Positioned.fill(child: SafeArea(child: overlays))
-          else
-            overlays,
-        ],
-      ),
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // The governor has no business streaming a rung this box cannot show.
+        if (constraints.hasBoundedHeight) {
+          _controller.maxRenderHeight = (constraints.maxHeight * dpr).round();
+        }
+        return ColoredBox(
+          color: Colors.black,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _videoSurface,
+              // Fullscreen: the video stays full-bleed but the controls avoid
+              // the display cutout / notch.
+              if (fullscreen)
+                Positioned.fill(child: SafeArea(child: overlays))
+              else
+                overlays,
+            ],
+          ),
+        );
+      },
     );
   }
 }

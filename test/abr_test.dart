@@ -99,27 +99,28 @@ void main() {
     test('steps up once the buffer is deep enough to prove headroom',
         () async {
       final h = _Harness()..buffered = const Duration(seconds: 200);
-      await h.tick(times: 5);
+      await h.tick(times: 6);
       expect(h.switches, isNotEmpty);
       expect(h.switches.first.decision, AbrDecision.up);
+      // One rung: every switch re-opens the stream on an HLS ladder.
       expect(h.switches.first.height, 1080);
     });
 
 
-    test('climbs to the top in one switch instead of a staircase', () async {
+    test('climbs one rung at a time however good the link looks', () async {
       final h = _Harness()
         ..index = 0
         ..buffered = const Duration(seconds: 20);
       await h.tick();
       // ~17 s of media arriving per second of wall clock, on a buffer that
       // stays short of the runway rule so the fill rate is what decides.
-      for (var i = 1; i <= 3; i++) {
+      for (var i = 1; i <= 5; i++) {
         h.buffered = Duration(seconds: 20 + 5 * i);
         await h.tick();
       }
       expect(h.switches, hasLength(1));
       expect(h.switches.single.decision, AbrDecision.up);
-      expect(h.switches.single.height, 1080);
+      expect(h.switches.single.height, 480);
     });
 
     test('drops straight onto a rung the collapsed link can carry', () async {
@@ -142,8 +143,8 @@ void main() {
     test('a stall inside the settle window is the switch, not a failure',
         () async {
       final h = _Harness()..buffered = const Duration(seconds: 200);
-      await h.tick(times: 2);
-      expect(h.switches, hasLength(1), reason: 'runway buffer earns the top');
+      await h.tick(times: 4);
+      expect(h.switches, hasLength(1), reason: 'runway buffer earns a rung');
       // The rung it just moved to is filling its cache — which mpv reports as
       // a stall. Panicking here would undo the switch on the spot.
       h.stalled = true;
@@ -160,7 +161,7 @@ void main() {
           startupGrace: Duration.zero,
         ),
       )..buffered = const Duration(seconds: 200);
-      await h.tick(times: 2);
+      await h.tick(times: 4);
       expect(h.switches, hasLength(1));
       h.stalled = true;
       await h.tick(times: 2);
@@ -248,6 +249,22 @@ void main() {
       expect(
         h.governor.startupLevel(h.levels, rememberedHeight: 1000)!.height,
         720,
+      );
+    });
+
+    test('a remembered height can lower the opening rung, never raise it',
+        () {
+      // The session that remembered 1080p proved the link at that moment, not
+      // now. A cold start above the ceiling is a long black screen followed by
+      // the downshifts the measurement was always going to force.
+      final h = _Harness();
+      expect(
+        h.governor.startupLevel(h.levels, rememberedHeight: 1080)!.height,
+        720,
+      );
+      expect(
+        h.governor.startupLevel(h.levels, rememberedHeight: 360)!.height,
+        360,
       );
     });
 

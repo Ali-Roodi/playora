@@ -43,7 +43,9 @@ void main() {
       final props =
           const PlayoraBufferConfig.aggressive().mpvProperties();
       expect(props['stream-lavf-o'], contains('reconnect=1'));
-      expect(props['stream-lavf-o'], contains('reconnect_streamed=1'));
+      // Never reconnect_streamed: an HLS segment ends in EOF by design, and
+      // that option answers every one of them with a backoff.
+      expect(props['stream-lavf-o'], isNot(contains('reconnect_streamed')));
     });
 
     test('the minimal profile keeps media_kit behaviour and no disk cache',

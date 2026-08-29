@@ -225,16 +225,29 @@ class PlaybackValue {
 class PlayoraController {
   PlayoraController({
     mk.PlayerConfiguration? configuration,
+    mk.MPVLogLevel? logLevel,
     PlayoraBufferConfig? buffering,
     PlayoraAbrConfig abr = const PlayoraAbrConfig(),
     mkv.VideoControllerConfiguration? videoConfiguration,
     this.positionUpdateInterval = const Duration(milliseconds: 200),
   })  : bufferConfig = buffering ?? const PlayoraBufferConfig.aggressive(),
         abrConfig = abr,
-        player = mk.Player(
+        _videoConfiguration =
+            videoConfiguration ?? const mkv.VideoControllerConfiguration(),
+        _playerConfiguration = configuration ??
+            mk.PlayerConfiguration(
+              title: 'playora',
+              logLevel: logLevel ?? mk.MPVLogLevel.error,
+              // Raised again — on disk — once a writable cache directory is
+              // confirmed; this value has to stay RAM-safe.
+              bufferSize: (buffering ?? const PlayoraBufferConfig.aggressive())
+                  .initialMaxBytes,
+            ),
+        _player = mk.Player(
           configuration: configuration ??
               mk.PlayerConfiguration(
                 title: 'playora',
+                logLevel: logLevel ?? mk.MPVLogLevel.error,
                 // Raised again — on disk — once a writable cache directory is
                 // confirmed; this value has to stay RAM-safe.
                 bufferSize:
@@ -244,19 +257,17 @@ class PlayoraController {
         ) {
     // Must run before the first open(); media_kit consults canPlayType there.
     ensureWebHlsPlayable();
-    videoController = mkv.VideoController(
-      player,
-      configuration:
-          videoConfiguration ?? const mkv.VideoControllerConfiguration(),
+    videoOutput = ValueNotifier(
+      mkv.VideoController(_player, configuration: _videoConfiguration),
     );
-    _bind();
+    _bind(_player);
     _tuning = _applyTuning();
     _governor = PlayoraAbrGovernor(
       config: abrConfig,
       levels: () => [for (final entry in _ladder()) entry.level],
       currentIndex: _currentLadderIndex,
       bufferAhead: () => bufferAhead,
-      playing: () => state.value.playing,
+      playing: () => state.value.playing && _progressing,
       stalled: () => state.value.buffering && state.value.started,
       overloaded: () => _decoderOverloaded,
       onSwitch: _applyAbrLevel,
@@ -266,8 +277,43 @@ class PlayoraController {
     );
   }
 
-  final mk.Player player;
-  late final mkv.VideoController videoController;
+  mk.Player _player;
+
+  /// The engine that is playing right now. A quality switch can replace it
+  /// with one that was warming up behind the picture.
+  mk.Player get player => _player;
+
+  /// The video output on screen.
+  ///
+  /// It changes when a warm switch swaps engines, so anything rendering the
+  /// video has to listen rather than hold on to one controller.
+  late final ValueNotifier<mkv.VideoController> videoOutput;
+
+  mkv.VideoController get videoController => videoOutput.value;
+
+  /// The recipe for a second engine, so the standby is built exactly like the
+  /// one on screen.
+  final mk.PlayerConfiguration _playerConfiguration;
+  final mkv.VideoControllerConfiguration _videoConfiguration;
+
+  /// The engine warming up behind the picture, kept for reuse afterwards.
+  mk.Player? _standbyPlayer;
+  bool _standbyTuned = false;
+
+  /// The standby's video output, which the host has to keep mounted — one
+  /// pixel of it is enough.
+  ///
+  /// On Android media_kit hands mpv a surface that only exists while a video
+  /// widget is attached, and `open()` waits for it. A standby engine nobody
+  /// renders therefore never loads anything, which is the whole warm switch
+  /// quietly doing nothing.
+  final ValueNotifier<mkv.VideoController?> standbyOutput = ValueNotifier(null);
+
+  /// True while a warm switch is preparing or handing over.
+  bool _warming = false;
+
+  /// Cancels a warm switch that is no longer wanted (a seek, a new source).
+  bool _warmCancelled = false;
 
   /// Demuxer/network tuning applied to the native backend.
   final PlayoraBufferConfig bufferConfig;
@@ -309,6 +355,14 @@ class PlayoraController {
   /// Hides embedded renditions from the adaptive ladder, mirroring the same
   /// predicate the quality menu uses.
   bool Function(int height)? qualityValidate;
+
+  /// Tallest rung worth streaming, in pixels — normally the height of the
+  /// video surface on screen.
+  ///
+  /// 1080p into a 640-pixel-tall box costs bandwidth, decode and a visible
+  /// re-open, and shows the viewer nothing. The menu still offers every rung;
+  /// this only bounds what the governor climbs to on its own.
+  int? maxRenderHeight;
 
   /// Height the adaptive ladder should aim for when a source is opened
   /// (typically the last height a previous session settled on).
@@ -407,6 +461,28 @@ class PlayoraController {
   /// Guard so overlapping reconciliations don't fight each other.
   bool _reconciling = false;
 
+  /// Whether the playhead has actually moved since the source was opened.
+  ///
+  /// media_kit reports `playing` the moment it is asked to play — seconds
+  /// before the first frame of an HLS stream on a phone. Measuring the link
+  /// in that window reads an empty cache and no throughput as a collapse, and
+  /// every "rescue" re-opens the source and starts the window again: five
+  /// spinners in the first twenty seconds, none of them necessary.
+  bool _progressing = false;
+
+  /// Playhead the progress check compares against.
+  Duration _progressAnchor = Duration.zero;
+
+  /// When the current source started opening — the numbers behind
+  /// `[playora] first playback after …`.
+  DateTime? _loadStartedAt;
+
+  /// One-shot rescue for a rung that never opens at all.
+  Timer? _openRescue;
+
+  /// Whether playback has actually got going for the current source.
+  bool get progressing => _progressing;
+
   /// What the viewer last asked for: true after [play], false after [pause].
   bool get desiredPlaying => _desiredPlaying;
 
@@ -419,6 +495,9 @@ class PlayoraController {
   /// Manual MP4 renditions of the current source, if it was opened as a list.
   List<VideoSource>? get renditions => _renditions;
 
+  /// Which rung of [hlsMaster] is playing, as an index into its variants.
+  int? get currentVariantIndex => _hlsVariantIndex;
+
   /// The HLS ladder read from the master playlist, or null for a source that
   /// isn't adaptive HLS.
   HlsMaster? get hlsMaster => _hlsMaster;
@@ -426,8 +505,8 @@ class PlayoraController {
   /// External subtitles registered for the current source.
   List<ExternalSubtitle> get externalSubtitles => _externalSubtitles;
 
-  void _bind() {
-    final s = player.stream;
+  void _bind(mk.Player target) {
+    final s = target.stream;
     _subs.addAll([
       s.playing.listen((playing) {
         _update((v) => v.copyWith(
@@ -452,6 +531,9 @@ class PlayoraController {
       }),
       s.position.listen(_onPosition),
       s.duration.listen((d) {
+        // A re-opening source reports zero first; keeping the last duration
+        // holds the scrubber and the remaining-time readout still.
+        if (d == Duration.zero && _switching) return;
         duration.value = d;
         if (d > Duration.zero) {
           _update((v) => v.copyWith(canPlay: true));
@@ -495,6 +577,11 @@ class PlayoraController {
         subtitleCues.value =
             cues.where((c) => c.trim().isNotEmpty).toList(growable: false);
       }),
+      s.log.listen((event) {
+        if (!debugLogging) return;
+        debugPrint('[playora] mpv ${event.level} ${event.prefix}: '
+            '${event.text.trimRight()}');
+      }),
       s.error.listen((e) {
         _update((v) => v.copyWith(error: e));
         _errors.add(e);
@@ -514,18 +601,22 @@ class PlayoraController {
     final path = await resolveCacheDirectory(bufferConfig);
     if (_disposed) return;
     _diskCachePath = path;
+    await _applyTuningTo(_player, path);
+  }
+
+  Future<void> _applyTuningTo(mk.Player target, String? path) async {
     await setMpvProperties(
-      player,
+      target,
       bufferConfig.mpvProperties(diskCachePath: path),
     );
     if (_disposed || path == null) return;
     // The large cap is only safe because the cache is a file. If this libmpv
     // build refused `cache-on-disk`, that many bytes would land on the heap —
     // pull the cap back to the RAM-safe one.
-    final onDisk = await getMpvProperty(player, 'cache-on-disk');
+    final onDisk = await getMpvProperty(target, 'cache-on-disk');
     if (_disposed || onDisk == 'yes') return;
     _diskCachePath = null;
-    await setMpvProperties(player, {
+    await setMpvProperties(target, {
       'demuxer-max-bytes': '${bufferConfig.memoryMaxBytes}',
     });
   }
@@ -533,6 +624,23 @@ class PlayoraController {
   // -------------------------------------------------------- position throttle
 
   void _onPosition(Duration p) {
+    if (!_progressing) {
+      // A source that is re-opening reports 0 before it seeks to where the
+      // viewer was. Publishing that rewinds the scrubber to the start and
+      // then jumps back — the switch reads as "it restarted the episode".
+      if (p + const Duration(seconds: 1) < _progressAnchor) return;
+    }
+    if (!_progressing &&
+        p - _progressAnchor > const Duration(milliseconds: 300)) {
+      _progressing = true;
+      final startedAt = _loadStartedAt;
+      if (debugLogging && startedAt != null) {
+        debugPrint('[playora] first playback after '
+            '${DateTime.now().difference(startedAt).inMilliseconds}ms');
+      }
+      _openRescue?.cancel();
+      _openRescue = null;
+    }
     // The playhead advancing while the intent is "paused" is the drift the
     // `playing` stream can miss entirely: media_kit stops reporting playback
     // state changes after a pause, so a resume underneath it is invisible.
@@ -591,7 +699,7 @@ class PlayoraController {
     if (webHlsLevels().isNotEmpty) return const [];
     final master = _hlsMaster;
     if (master != null) {
-      final variants = _selectableVariants(master);
+      final variants = _cappedForRender(_selectableVariants(master));
       if (variants.length < 2) return const [];
       return [
         for (var i = 0; i < variants.length; i++)
@@ -646,6 +754,23 @@ class PlayoraController {
     return result;
   }
 
+  /// Drops the rungs the surface is too small to show, keeping at least two
+  /// so there is still a ladder to move on.
+  List<({int index, HlsVariant variant})> _cappedForRender(
+    List<({int index, HlsVariant variant})> variants,
+  ) {
+    final cap = maxRenderHeight;
+    if (cap == null || variants.length < 3) return variants;
+    // A rung a little taller than the surface is still worth having: the
+    // surface can grow (fullscreen), and downscaling a near-fit is cheap.
+    final limit = (cap * 1.2).round();
+    final kept = [
+      for (final entry in variants)
+        if ((entry.variant.height ?? 0) <= limit) entry,
+    ];
+    return kept.length < 2 ? variants.take(2).toList() : kept;
+  }
+
   int? _currentLadderIndex() {
     if (!_autoQuality) return null;
     final ladder = _ladder();
@@ -654,7 +779,7 @@ class PlayoraController {
     if (master != null) {
       final current = _hlsVariantIndex;
       if (current == null) return null;
-      final variants = _selectableVariants(master);
+      final variants = _cappedForRender(_selectableVariants(master));
       for (var i = 0; i < variants.length; i++) {
         if (variants[i].index == current) return i;
       }
@@ -728,6 +853,12 @@ class PlayoraController {
 
   void _applyAbrLevel(AbrLevel level, AbrDecision decision) {
     if (_disposed || _switching) return;
+    if (_warming) {
+      // A climb being prepared is worth nothing next to a link that is
+      // failing now. Drop it; the governor asks again on the next tick.
+      if (decision == AbrDecision.down) _cancelWarmSwitch();
+      return;
+    }
     // The new rung decodes at its own cost; the old rung's drop history says
     // nothing about it.
     _resetDecodeSample();
@@ -741,7 +872,15 @@ class PlayoraController {
     if (decision != AbrDecision.hold) _beginQualitySwitch();
     onAutoHeightChanged?.call(entry.level.height);
     // Keep `_autoQuality` on — this is the governor moving, not the viewer.
-    unawaited(_applyQuality(entry.option));
+    //
+    // A climb that cannot be prepared behind the picture is simply not worth
+    // having: the rung that is playing is fine, and re-opening for a better
+    // one costs the viewer seconds of black screen to fix nothing. Retreating
+    // is the opposite — the current rung is the problem.
+    unawaited(_applyQuality(
+      entry.option,
+      allowReopen: decision != AbrDecision.up,
+    ));
   }
 
   /// Fetches and parses the master playlist for [url], or null when it isn't
@@ -757,8 +896,21 @@ class PlayoraController {
   /// The variant a fresh source should open at: the remembered height from a
   /// previous session, else the startup ceiling, else the top rung.
   int? _startupVariant(HlsMaster master) {
-    final variants = _selectableVariants(master);
+    final variants = _cappedForRender(_selectableVariants(master));
     if (variants.length < 2) return null;
+    // Plenty of packagers ship a master without RESOLUTION. Heights are the
+    // whole basis of the ceiling, so without them fall back to what the rungs
+    // cost: the most expensive one the ceiling's own budget covers.
+    if (variants.every((entry) => entry.variant.height == null)) {
+      final height = _governor.startupCeiling(preferredStartHeight);
+      if (height == null) return variants.last.index;
+      final budget = AbrLevel(index: 0, height: height).weight * _bitrateSlack;
+      var best = variants.first;
+      for (final entry in variants) {
+        if (entry.variant.plannedBitrate <= budget) best = entry;
+      }
+      return best.index;
+    }
     final ladder = [
       for (var i = 0; i < variants.length; i++)
         AbrLevel(
@@ -809,15 +961,19 @@ class PlayoraController {
   /// nothing and skips both.
   Future<void> _applyStartupBitrateCap() async {
     if (!mpvTuningSupported || !abrConfig.enabled) return;
-    final height = preferredStartHeight ?? abrConfig.startupHeightCeiling;
+    final height = _governor.startupCeiling(preferredStartHeight);
     if (height == null) return;
     // Manifests advertise peak bandwidth, comfortably above the average a
     // rendition actually costs, so the cap is generous — its job is to keep
     // the top rung out of the opening pick, not to pick the rung itself.
     final ceiling =
-        (AbrLevel(index: 0, height: height).weight * 1.6).round();
+        (AbrLevel(index: 0, height: height).weight * _bitrateSlack).round();
     await setMpvProperties(player, {'hls-bitrate': '$ceiling'});
   }
+
+  /// Manifests advertise peak bandwidth, comfortably above what a rendition
+  /// averages, so a budget built from a height estimate is given room.
+  static const double _bitrateSlack = 1.6;
 
   /// Open a source. Either a single [url] (HLS/MP4) or a list of MP4
   /// [renditions] for a manual quality menu. Optionally start at [startAt].
@@ -835,7 +991,13 @@ class PlayoraController {
     await ready;
     if (_disposed) return;
     _pendingSeek = null; // a parked seek belongs to the previous source
+    _cancelWarmSwitch();
+    _loadStartedAt = DateTime.now();
     _desiredPlaying = play;
+    _progressing = false;
+    _progressAnchor = startAt ?? Duration.zero;
+    _openRescue?.cancel();
+    _openRescue = null;
     _renditions = renditions;
     _externalSubtitles = externalSubtitles;
     var target = url ?? renditions![renditionIndex].src;
@@ -846,11 +1008,26 @@ class PlayoraController {
     if (url != null && !_internalReload) {
       _hlsMaster = null;
       _hlsVariantIndex = null;
+      final manifestAt = DateTime.now();
       final master = await _resolveHlsMaster(url);
       if (_disposed) return;
+      if (debugLogging) {
+        debugPrint('[playora] manifest in '
+            '${DateTime.now().difference(manifestAt).inMilliseconds}ms '
+            '(${master == null ? 'no ladder' : '${master.variants.length} rungs'})');
+      }
       if (master != null) {
         _hlsMaster = master;
         final opening = _startupVariant(master);
+        if (debugLogging) {
+          final rungs = [
+            for (final entry in _selectableVariants(master))
+              '${entry.variant.label}'
+                  '(${(entry.variant.plannedBitrate / 1000).round()}k)',
+          ].join(' ');
+          debugPrint('[playora] hls ladder: $rungs -> opening '
+              '${opening == null ? 'as-is' : master.variants[opening].label}');
+        }
         if (opening != null) {
           _hlsVariantIndex = opening;
           _startupLevelApplied = true;
@@ -881,14 +1058,216 @@ class PlayoraController {
       _endQualitySwitch();
     }
     await _applyStartupBitrateCap();
+    final openAt = DateTime.now();
     await player.open(
       mk.Media(target, start: startAt),
       play: play,
     );
+    if (debugLogging) {
+      debugPrint('[playora] open() returned in '
+          '${DateTime.now().difference(openAt).inMilliseconds}ms');
+    }
     _governor.start();
     _startDecodeProbe();
+    _armOpenRescue();
     final def = externalSubtitles.where((e) => e.isDefault).firstOrNull;
     if (def != null) await selectExternalSubtitle(def);
+  }
+
+  // ------------------------------------------------------------ warm switch
+
+  /// Prepares [url] on a second engine and hands the picture over to it.
+  ///
+  /// Returns false when the standby could not be made ready in time, in which
+  /// case nothing has changed and the caller can fall back to re-opening.
+  Future<bool> _warmSwitch(String url, int variantIndex) async {
+    if (!mpvTuningSupported || !abrConfig.warmSwitch) return false;
+    if (_disposed || _warming || _switching || !_desiredPlaying) return false;
+    // A warm switch buys nothing while paused, and the handover needs a
+    // playhead that is moving towards it.
+    if (!_progressing) return false;
+    final total = duration.value;
+    // The deeper the buffer, the longer the standby has to fill a couple of
+    // seconds of a heavier rung before the playhead catches up with it.
+    final leadMs = bufferAhead.inMilliseconds - 4000;
+    final lead = Duration(
+      milliseconds: leadMs.clamp(
+        abrConfig.warmSwitchLead.inMilliseconds,
+        abrConfig.warmSwitchMaxLead.inMilliseconds,
+      ),
+    );
+    final target = position.value + lead;
+    // Too close to the end to hand over before the file runs out.
+    if (total > Duration.zero &&
+        target > total - const Duration(seconds: 3)) {
+      return false;
+    }
+    _warming = true;
+    _warmCancelled = false;
+    mk.Player? standby;
+    try {
+      standby = await _ensureStandby();
+      if (_warmCancelled || _disposed) return false;
+      await standby.setVolume(0);
+      await standby.open(mk.Media(url, start: target), play: false);
+      if (!await _waitForStandby(standby, target)) return false;
+      if (!await _awaitHandover(target)) return false;
+      await _handOverTo(standby);
+      _hlsVariantIndex = variantIndex;
+      return true;
+    } catch (error) {
+      if (debugLogging) debugPrint('[playora] warm switch failed: $error');
+      return false;
+    } finally {
+      if (!_disposed && standby != null && identical(standby, _standbyPlayer)) {
+        // Still the standby — the handover did not happen. Let go of the
+        // media so it stops downloading behind the picture.
+        unawaited(standby.stop());
+      }
+      _warming = false;
+    }
+  }
+
+  /// Stops a warm switch that has been overtaken by events.
+  void _cancelWarmSwitch() {
+    if (_warming) _warmCancelled = true;
+  }
+
+  /// The second engine, built exactly like the one on screen.
+  Future<mk.Player> _ensureStandby() async {
+    final existing = _standbyPlayer;
+    if (existing != null) return existing;
+    final startedAt = DateTime.now();
+    final player = mk.Player(configuration: _playerConfiguration);
+    _standbyPlayer = player;
+    standbyOutput.value = mkv.VideoController(
+      player,
+      configuration: _videoConfiguration,
+    );
+    // Give the host a frame to mount the standby surface before anything
+    // waits on it.
+    await Future<void>.delayed(const Duration(milliseconds: 32));
+    if (!_standbyTuned) {
+      _standbyTuned = true;
+      await _applyTuningTo(player, _diskCachePath);
+    }
+    if (debugLogging) {
+      debugPrint('[playora] standby engine built in '
+          '${DateTime.now().difference(startedAt).inMilliseconds}ms');
+    }
+    return player;
+  }
+
+  /// Waits until the standby has cached enough past [target] to take over
+  /// without a beat — or until the playhead gets there first, which is the
+  /// answer that it could not.
+  Future<bool> _waitForStandby(mk.Player standby, Duration target) async {
+    // The hand-over point is the deadline: there is no point waiting past the
+    // moment the picture needs the new engine.
+    final mark = target - const Duration(milliseconds: 250);
+    while (position.value < mark) {
+      if (_warmCancelled || _disposed || !_desiredPlaying) return false;
+      final state = standby.state;
+      if (state.duration > Duration.zero &&
+          state.buffer >= target + const Duration(milliseconds: 1500)) {
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    if (debugLogging) {
+      final state = standby.state;
+      debugPrint('[playora] standby fell short: cached to ${state.buffer} '
+          'of ${target + const Duration(milliseconds: 1500)}, '
+          'duration=${state.duration}');
+    }
+    return false;
+  }
+
+  /// Waits for the playhead to reach the point the standby is holding.
+  Future<bool> _awaitHandover(Duration target) async {
+    final mark = target - const Duration(milliseconds: 250);
+    final deadline = DateTime.now().add(abrConfig.warmSwitchMaxLead);
+    while (DateTime.now().isBefore(deadline)) {
+      if (_warmCancelled || _disposed || !_desiredPlaying) return false;
+      // A hair early: the engines swap on the frame before the mark, so the
+      // one taking over has nothing to catch up on.
+      if (position.value >= mark) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+    return false;
+  }
+
+  /// Puts [standby] on screen and retires the engine that was playing.
+  Future<void> _handOverTo(mk.Player standby) async {
+    final retiring = _player;
+    final retiringVideo = videoOutput.value;
+    final incomingVideo = standbyOutput.value!;
+    final volume = state.value.volume;
+    final rate = state.value.rate;
+    // The new engine starts on the stream's defaults; the viewer's choices
+    // have to move across with the picture.
+    final audio = state.value.selected.audio;
+    final subtitle = state.value.selected.subtitle;
+
+    await standby.play();
+    await standby.setRate(rate);
+    await standby.setVolume(volume * 100);
+    // Everything the old engine says from here belongs to a picture nobody is
+    // watching any more.
+    for (final sub in _subs) {
+      unawaited(sub.cancel());
+    }
+    _subs.clear();
+    _player = standby;
+    _standbyPlayer = retiring;
+    _bind(standby);
+    // The engines trade places: the one taking over goes full size, the one
+    // stepping back keeps its one-pixel surface for the next switch.
+    videoOutput.value = incomingVideo;
+    standbyOutput.value = retiringVideo;
+    await retiring.setVolume(0);
+    await retiring.pause();
+    unawaited(retiring.stop());
+
+    // The picture never stopped, so nothing about the new engine is "opening"
+    // and there is no re-buffer for the skin to hide.
+    _progressing = true;
+    _progressAnchor = position.value;
+    _governor.noteSwitchSettled();
+    _resetDecodeSample();
+    _endQualitySwitch();
+    final active = state.value.activeExternalSubtitle;
+    if (active != null) {
+      await selectExternalSubtitle(active);
+    } else if (subtitle.id != 'no' && subtitle.id != 'auto' && !subtitle.uri) {
+      await standby.setSubtitleTrack(subtitle);
+    }
+    if (audio.id != 'auto' && audio.id != 'no' && !audio.uri) {
+      await standby.setAudioTrack(audio);
+    }
+  }
+
+  /// Steps down once when a rung produces no playback at all.
+  ///
+  /// The rest of the governor is deliberately blind while a source is opening.
+  /// That leaves one case uncovered: the rung the link cannot carry at all,
+  /// where nothing ever starts and so nothing is ever measured.
+  void _armOpenRescue() {
+    _openRescue?.cancel();
+    _openRescue = null;
+    if (!abrConfig.enabled || !_autoQuality) return;
+    _openRescue = Timer(abrConfig.openRescueTime, () {
+      if (_disposed || _progressing || !_autoQuality || _switching) return;
+      if (!_desiredPlaying) return;
+      final ladder = _ladder();
+      final index = _currentLadderIndex();
+      if (ladder.isEmpty || index == null || index <= 0) return;
+      if (debugLogging) {
+        debugPrint('[playora] no playback in '
+            '${abrConfig.openRescueTime.inSeconds}s -> down a rung');
+      }
+      _applyAbrLevel(ladder[index - 1].level, AbrDecision.down);
+    });
   }
 
   // ----------------------------------------------------------- decode health
@@ -1010,6 +1389,7 @@ class PlayoraController {
 
   /// Seek and record the jump for analytics.
   Future<void> seek(Duration to) async {
+    _cancelWarmSwitch();
     final from = position.value;
     final d = duration.value;
     var clamped = to < Duration.zero ? Duration.zero : to;
@@ -1192,8 +1572,11 @@ class PlayoraController {
     if (state.value.started) _beginQualitySwitch();
     _autoQuality = option.isAuto;
     if (option.isAuto && _hlsMaster != null && abrConfig.enabled) {
-      // The governor picks up from whatever variant is playing.
-      _governor.reset();
+      // The governor picks up from whatever variant is playing, keeping what
+      // it already knows about the link: the stream never stopped, and
+      // rebuilding the measurement from nothing would leave "Auto" looking
+      // like it does nothing for the best part of a minute.
+      _governor.resumeAuto();
       return;
     }
     if (option.isAuto && abrConfig.enabled && webHlsLevels().isEmpty) {
@@ -1205,7 +1588,8 @@ class PlayoraController {
     await _applyQuality(option);
   }
 
-  Future<void> _applyQuality(QualityOption option) async {
+  Future<void> _applyQuality(QualityOption option,
+      {bool allowReopen = true}) async {
     if (option.renditionIndex != null) {
       final renditions = _renditions;
       if (renditions == null) return;
@@ -1238,6 +1622,23 @@ class PlayoraController {
       if (index == _hlsVariantIndex) return;
       final url = await _mediaUrlForVariant(master, index);
       if (url == null || _disposed) return;
+      final label = master.variants[index].label;
+      if (abrConfig.warmSwitch) {
+        if (await _warmSwitch(url, index)) {
+          if (debugLogging) debugPrint('[playora] warm switch to $label');
+          return;
+        }
+        if (_disposed || !allowReopen) {
+          if (debugLogging && !_disposed) {
+            debugPrint('[playora] warm switch to $label not ready — staying '
+                'on the rung that is playing');
+          }
+          return;
+        }
+      }
+      // The standby could not be made ready in time — re-open in front of the
+      // viewer, which is what the switch used to cost every time.
+      if (debugLogging) debugPrint('[playora] cold switch to $label');
       // Same shape as an MP4 rendition swap: re-open the other playlist and
       // put the playhead and the play state back where they were.
       final at = position.value;
@@ -1354,6 +1755,7 @@ class PlayoraController {
     if (_disposed) return;
     _disposed = true;
     _governor.dispose();
+    _openRescue?.cancel();
     _decodeProbe?.cancel();
     _qualitySwitchTimer?.cancel();
     _positionFlush?.cancel();
@@ -1364,6 +1766,12 @@ class PlayoraController {
     await _errors.close();
     await _completions.close();
     await _qualityChanges.close();
+    final standby = _standbyPlayer;
+    _standbyPlayer = null;
+    standbyOutput.value = null;
+    if (standby != null) await standby.dispose();
+    standbyOutput.dispose();
+    videoOutput.dispose();
     state.dispose();
     position.dispose();
     duration.dispose();

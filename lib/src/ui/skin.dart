@@ -944,6 +944,8 @@ class _PlayerSkinState extends State<PlayerSkin> {
                 : null,
             selected: option.isAuto
                 ? isAuto
+                : option.variantIndex != null
+                ? !isAuto && option.variantIndex == controller.currentVariantIndex
                 : option.renditionIndex != null
                 ? !isAuto && option.renditionIndex == state.renditionIndex
                 : option.hlsLevelIndex != null

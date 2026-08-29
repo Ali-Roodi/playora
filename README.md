@@ -23,6 +23,7 @@ playlists & seasons · optional analytics + resume · Persian (RTL) & English ou
 
 - **HLS + MP4** — adaptive HLS or progressive MP4. Pass a list of MP4 renditions for a manual quality menu.
 - **Real adaptive quality** — mpv exposes no tracks for an HLS master playlist: it opens one variant and stays there, however badly that goes. Playora reads the ladder from the manifest itself, opens at a rung a phone can start fast on, and runs its own governor over it — measuring how fast media actually arrives, stepping down when the buffer drains or the decoder falls behind, and back up once the link has proven headroom.
+- **Switches you do not see** — mpv cannot change the rendition of a running HLS stream, so Playora prepares the new rung on a second engine a few seconds ahead of the playhead and hands over when it gets there. A climb that cannot be prepared in time is skipped rather than paid for with a black screen.
 - **Weak devices count too** — a phone that cannot decode 1080p in real time drops frames while every network signal reads healthy. Sustained decoder drops step the quality down like a failing link does.
 - **Buffers deep** — reads ahead for as long as the byte cap allows (often the rest of the episode) with a disk-backed cache, long network timeouts and transparent HTTP reconnects, so a weak connection doesn't stall playback.
 - **Custom skin** — dark, gold-accented, light mode, RTL/LTR, responsive. Layout stays physical; RTL only right-aligns text (like YouTube).
@@ -187,8 +188,12 @@ The cache is backed by a file in the app's temp directory when one is
 writable — that is what allows the cap to be large without costing RAM.
 Without one it falls back to a smaller, RAM-safe cap automatically.
 
-With `persistSettings: true` the height the governor settled on is remembered,
-so the next session opens there instead of probing up again.
+With `persistSettings: true` the height the governor settled on is
+remembered. It can only *lower* where the next session opens, never raise it
+past `startupHeightCeiling`: the session it came from proved the link at that
+moment, and a cold start at 1080p on a link that cannot carry it is a long
+black screen followed by the downshifts the measurement was always going to
+force.
 
 Set `abr: const PlayoraAbrConfig(enabled: false)` to hand quality selection
 back to mpv, and `buffering: const PlayoraBufferConfig.minimal()` to return to

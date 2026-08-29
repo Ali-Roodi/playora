@@ -19,17 +19,21 @@ class PlayoraAbrConfig {
     this.enabled = true,
     this.startupHeightCeiling = 720,
     this.minBufferAhead = const Duration(seconds: 6),
-    this.upshiftBufferAhead = const Duration(seconds: 12),
+    this.upshiftBufferAhead = const Duration(seconds: 20),
     this.runwayBufferAhead = const Duration(seconds: 60),
     this.probeInterval = const Duration(seconds: 1),
-    this.upshiftCooldown = const Duration(seconds: 5),
+    this.upshiftCooldown = const Duration(seconds: 20),
     this.downshiftCooldown = const Duration(seconds: 4),
     this.switchSettleTime = const Duration(seconds: 5),
     this.startupGrace = const Duration(seconds: 5),
-    this.upshiftGoodTicks = 2,
-    this.headroom = 1.15,
+    this.upshiftGoodTicks = 4,
+    this.headroom = 1.4,
     this.ceilingRelaxTime = const Duration(seconds: 45),
     this.decoderDropTolerance = 4,
+    this.warmSwitch = true,
+    this.warmSwitchLead = const Duration(seconds: 6),
+    this.warmSwitchMaxLead = const Duration(seconds: 25),
+    this.openRescueTime = const Duration(seconds: 12),
     this.manifestTimeout = const Duration(milliseconds: 1500),
     this.allowRenditionSwitching = false,
   });
@@ -85,7 +89,12 @@ class PlayoraAbrConfig {
   /// cannot trigger a switch.
   final int upshiftGoodTicks;
 
-  /// Extra measured throughput required before stepping up (1.15 = 15 %).
+  /// Extra measured throughput required before stepping up (1.4 = 40 %).
+  ///
+  /// A cache that fills in bursts — which is what a segmented stream does —
+  /// measures far above what the link sustains, and a climb that has to be
+  /// taken back costs the viewer two visible re-opens. The margin is what
+  /// keeps an optimistic sample from buying them.
   final double headroom;
 
   /// How long a rung that just failed stays out of reach, per step back up.
@@ -106,6 +115,38 @@ class PlayoraAbrConfig {
   /// governor would hold the rung the viewer is watching as a slideshow.
   /// Sustained drops step it down a rung instead.
   final double decoderDropTolerance;
+
+  /// Whether a quality change may be prepared behind the picture instead of
+  /// re-opening the stream in front of the viewer.
+  ///
+  /// mpv has no way to change the rendition of a running HLS stream: a switch
+  /// re-opens it, and re-opening costs seconds of black screen — the whole
+  /// reason a switch is something to avoid. A warm switch opens the new rung
+  /// on a second engine, a few seconds ahead of the playhead, lets it fill
+  /// its cache while the first one keeps playing, and hands over at the
+  /// moment the playhead arrives. The viewer sees the picture change quality;
+  /// nothing stops.
+  final bool warmSwitch;
+
+  /// The least head start the standby engine gets: it opens this far ahead of
+  /// the playhead and has until the playhead arrives to become ready.
+  final Duration warmSwitchLead;
+
+  /// The most head start it gets. A deep buffer is time the standby can use —
+  /// filling a couple of seconds of a much heavier rung takes a while on the
+  /// link that made the rung a question in the first place — but a hand-over
+  /// half a minute out is a promise about a link nobody can make.
+  final Duration warmSwitchMaxLead;
+
+  /// How long a source may fail to produce a single second of playback before
+  /// the governor treats the opening rung itself as the problem and steps
+  /// down once.
+  ///
+  /// Everything else the governor does is gated on playback actually running:
+  /// while a source is still opening there is no throughput to measure, and
+  /// judging it there is what turns one slow start into a chain of re-opens.
+  /// This is the one exception — the rung that never opens at all.
+  final Duration openRescueTime;
 
   /// How long the HLS master playlist may take to arrive before the source is
   /// opened without a ladder. It gates the first frame, so it is short.
@@ -144,6 +185,9 @@ enum AbrDecision { hold, up, down }
 
 /// Fill rate a starving buffer has to beat to be considered recovering.
 const double _recoveryHeadroom = 1.1;
+
+/// Ceiling holds stop doubling here — five minutes of not asking again.
+const int _maxCeilingHoldMs = 5 * 60 * 1000;
 
 /// Buffer-driven ABR loop.
 ///
@@ -205,6 +249,12 @@ class PlayoraAbrGovernor {
   int? _ceilingIndex;
   DateTime? _ceilingAt;
 
+  /// How long the current cap holds before it lifts a rung. It doubles each
+  /// time the ladder fails at the same place, so a link that cannot carry the
+  /// next rung is asked about it less and less often instead of paying for
+  /// the same failed climb every minute.
+  Duration? _ceilingHold;
+
   /// When playback first got going for the current source. Everything before
   /// that plus [PlayoraAbrConfig.startupGrace] is the stream opening, not the
   /// link struggling.
@@ -228,6 +278,19 @@ class PlayoraAbrGovernor {
     _lastSampleAt = null;
   }
 
+  /// Hands quality back to the governor after the viewer had it.
+  ///
+  /// Unlike [reset] this keeps what has been measured about the link — the
+  /// stream never stopped — so the first decision comes in seconds rather
+  /// than after the whole measurement has been rebuilt from nothing.
+  void resumeAuto() {
+    _goodTicks = 0;
+    _ceilingIndex = null;
+    _ceilingAt = null;
+    _ceilingHold = null;
+    _lastSwitchAt = null;
+  }
+
   /// Forget measurements — call on every new media source.
   void reset() {
     _lastBuffer = null;
@@ -237,16 +300,33 @@ class PlayoraAbrGovernor {
     _goodTicks = 0;
     _ceilingIndex = null;
     _ceilingAt = null;
+    _ceilingHold = null;
     _playingSince = null;
   }
 
   void dispose() => stop();
 
+  /// The height a fresh source may open at: the lower of the configured
+  /// ceiling and whatever a previous session settled on.
+  ///
+  /// A remembered height can only lower the opening rung, never raise it. The
+  /// session it came from proved the link at that moment, not now — and the
+  /// expensive way to be wrong is high: a cold start at 1080p on a link that
+  /// cannot carry it is a long black screen followed by the downshifts the
+  /// measurement was always going to force. Climbing back costs one switch
+  /// twenty seconds in, by which time the buffer can absorb it.
+  int? startupCeiling(int? rememberedHeight) {
+    final ceiling = config.startupHeightCeiling;
+    if (rememberedHeight == null) return ceiling;
+    if (ceiling == null) return rememberedHeight;
+    return rememberedHeight < ceiling ? rememberedHeight : ceiling;
+  }
+
   /// The rung to open a fresh source with, given an optional remembered
   /// height from a previous session.
   AbrLevel? startupLevel(List<AbrLevel> ladder, {int? rememberedHeight}) {
     if (ladder.isEmpty) return null;
-    final ceiling = rememberedHeight ?? config.startupHeightCeiling;
+    final ceiling = startupCeiling(rememberedHeight);
     if (ceiling == null) return ladder.last;
     AbrLevel? best;
     for (final level in ladder) {
@@ -338,6 +418,14 @@ class PlayoraAbrGovernor {
             : safeIndex - 1;
         // The rung being left just failed: keep the ladder capped at what the
         // link demonstrably carries until the cap has relaxed back up there.
+        final previous = _ceilingIndex;
+        final hold = _ceilingHold ?? config.ceilingRelaxTime;
+        _ceilingHold = previous != null && target <= previous
+            ? Duration(
+                milliseconds:
+                    (hold.inMilliseconds * 2).clamp(0, _maxCeilingHoldMs),
+              )
+            : config.ceilingRelaxTime;
         _ceilingIndex = target;
         _ceilingAt = now;
         _switch(
@@ -367,9 +455,21 @@ class PlayoraAbrGovernor {
     // a stall, a downshift, and the same jump again.
     final affordable = _affordableIndex(ladder, current);
     var target = affordable;
-    if (target <= safeIndex && buffered >= config.runwayBufferAhead) {
+    // Runway is only runway while media is still arriving: a link that has
+    // stopped delivering leaves a deep buffer behind it too, and that is the
+    // last moment to ask it for a heavier rung.
+    if (target <= safeIndex &&
+        buffered >= config.runwayBufferAhead &&
+        _fillRate >= 0.8) {
       target = safeIndex + 1;
     }
+    // One rung at a time, however good the link looks. The fill rate is
+    // measured against the rung that is playing, and a cache filling in bursts
+    // reads far above what the link sustains — enough to make 360p look like
+    // proof that 1080p will hold. Every switch re-opens the stream and costs
+    // the viewer a visible beat, so the cheap direction to be wrong in is
+    // upwards, slowly.
+    if (target > safeIndex + 1) target = safeIndex + 1;
     final ceiling = _relaxedCeiling(now, ladder.length - 1);
     if (target > ceiling) target = ceiling;
     if (target <= safeIndex) {
@@ -393,7 +493,7 @@ class PlayoraAbrGovernor {
     final ceiling = _ceilingIndex;
     final at = _ceilingAt;
     if (ceiling == null || at == null) return top;
-    final relax = config.ceilingRelaxTime;
+    final relax = _ceilingHold ?? config.ceilingRelaxTime;
     if (relax <= Duration.zero) {
       _ceilingIndex = null;
       _ceilingAt = null;
@@ -404,6 +504,7 @@ class PlayoraAbrGovernor {
     if (raised >= top) {
       _ceilingIndex = null;
       _ceilingAt = null;
+      _ceilingHold = null;
       return top;
     }
     if (steps > 0) {

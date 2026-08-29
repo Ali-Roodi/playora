@@ -41,6 +41,62 @@ pressed, and a video that stops when the screen locks.
   the ladder to the bottom one reload at a time. Switches are also serialised:
   a second one cannot start while the first is still opening.
 
+- **Nothing is judged while a source is still opening.** media_kit reports
+  `playing` the moment it is asked to, seconds before the first frame of an
+  HLS stream on a phone. The governor read that window — empty cache, no
+  throughput — as a collapsing link and "rescued" the viewer by re-opening at
+  a lower rung, which started the window again: five spinners in the first
+  twenty seconds on a real device. Every decision now waits for the playhead
+  to actually move, with one exception: a rung that produces no playback at
+  all within `openRescueTime` (12 s) steps down once.
+- **The climb is one rung at a time.** The fill rate is measured against the
+  rung that is playing, and a cache filling in bursts — which is what a
+  segmented stream does — reads far above what the link sustains: enough to
+  make 360p look like proof that 1080p will hold. With `headroom` at 1.4, a
+  20 s cooldown and four good samples, a climb has to be earned.
+- **A rung that keeps failing is asked about less and less.** The cap a
+  downshift leaves behind now doubles its hold each time the ladder fails at
+  the same place, up to five minutes, instead of paying for the same failed
+  climb every 45 s.
+- **The governor will not climb past what the surface can show.** 1080p into a
+  640-pixel-tall box costs bandwidth, decode and a visible re-open, and shows
+  the viewer nothing. `PlayoraPlayer` measures the video box and sets
+  `PlayoraController.maxRenderHeight` from it; the quality menu still offers
+  every rung.
+
+### Switching without the viewer noticing
+
+- **A quality change is prepared behind the picture.** mpv cannot change the
+  rendition of a running HLS stream — a switch re-opens it, which on a phone
+  measured 4.7–5.5 s of black screen, every time. Playora now opens the new
+  rung on a second engine a few seconds ahead of the playhead, lets it fill
+  its cache while the first one keeps playing, and hands over at the moment
+  the playhead arrives. The picture changes quality; nothing stops, and the
+  clock never jumps back to zero.
+- **The head start scales with the buffer**, from `warmSwitchLead` (6 s) up to
+  `warmSwitchMaxLead` (25 s): filling a couple of seconds of a much heavier
+  rung takes a while on the link that made the rung a question in the first
+  place.
+- **A climb that cannot be prepared is simply not taken.** The rung that is
+  playing is fine; re-opening the stream to improve on it costs the viewer
+  seconds of black screen to fix nothing. A retreat still re-opens, because
+  there the rung that is playing is the problem.
+- **The standby engine keeps a mounted, full-size surface.** On Android
+  media_kit hands mpv a surface that exists only while a video widget is
+  attached, and `open()` waits for it — a standby nobody renders never loads
+  anything. Both engines are laid out at full size and only the curtain
+  between them moves, so the one taking over has been rendering into a
+  correctly sized surface all along.
+- **The video widget is keyed to its engine.** media_kit's `Video` takes its
+  controller once; without a new key the picture stays on the engine that just
+  stepped back — which is stopped, which is black until something else forces
+  a rebuild.
+- **Back to Auto picks up immediately.** Handing quality back to the governor
+  keeps what it has measured about the link (the stream never stopped), so it
+  acts in seconds instead of looking inert for the best part of a minute.
+  `PlayoraController.currentVariantIndex` also lets the quality menu mark the
+  rung that is playing.
+
 ### Weak devices
 
 - **Sustained dropped frames now cost a rung.** A phone that cannot decode
@@ -68,13 +124,24 @@ pressed, and a video that stops when the screen locks.
 
 ### Startup and network
 
+- **Segment boundaries are no longer treated as dropped connections.** Playora
+  asked libavformat for `reconnect_streamed=1`, which sounds like the thorough
+  choice and is the opposite: every HLS segment is a finite file, so every one
+  of them ends in `End of file`, and that option answered each with a 0/1/3 s
+  reconnect backoff. Measured on a phone against a real ladder, dropping it
+  took the first frame from 16.2 s to 4.4 s and removed the stall at every
+  segment boundary. What is left is `reconnect=1` — a connection that drops
+  *before* the end of a response — with a 5 s cap on the retry delay.
 - **A shorter probe before the first frame.** ffmpeg analysed several seconds
-  of media before reporting the streams, and every one of those seconds was
-  black screen; `demuxer-lavf-analyzeduration` is now 1 s.
-- **Connections are reused between segment requests** (`multiple_requests=1`),
-  and a dropped one is retried within 5 s instead of backing off to 30.
+  and up to 5 MB of media before reporting the streams, and on a phone link
+  that is seconds of black screen. `demuxer-lavf-analyzeduration` is now 1 s
+  and `demuxer-lavf-probesize` 512 KB.
+- **Connections are reused between segment requests** (`multiple_requests=1`).
 - **`network-timeout` is 15 s, not 30.** A socket that has silently died holds
   the picture for the whole timeout before anything retries it.
+- **mpv's own log is forwarded** to `debugPrint` when `debugLogging` is on,
+  together with how long the manifest, the `open()` and the first frame took.
+  That is how the reconnect storm above was found.
 
 ## 0.6.0
 
