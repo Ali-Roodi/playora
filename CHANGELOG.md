@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.7.0
+
+Adaptive quality that actually adapts on mobile, a pause button that stays
+pressed, and a video that stops when the screen locks.
+
+### Adaptive quality
+
+- **The ladder now comes from the HLS manifest.** mpv exposes no tracks for a
+  master playlist — it opens one variant (in practice the first one listed)
+  and stays there no matter how badly that goes, which is why "Auto" was the
+  only entry in the quality menu and the governor had nothing to steer.
+  Playora now reads the master itself, so the menu lists real rungs and the
+  governor can move between them by re-opening the chosen variant playlist at
+  the same position. The fetch is bounded (1.5 s): a slow manifest costs the
+  ladder, never the playback.
+- **A master that keeps audio in its own rendition keeps its audio.** Playing
+  such a variant on its own would come up silent, so Playora writes a
+  one-variant master that still carries the `EXT-X-MEDIA` renditions, with
+  absolute URIs, and plays that.
+- **A fresh session opens at 720p instead of the top rung.** Opening at 1080p
+  means downloading its first segments before a single frame appears — the
+  slow start on a phone, and on a weak link a stall followed by the downshift
+  the measurement was always going to force. `startupHeightCeiling: null`
+  restores the old behaviour. A remembered height from a previous session
+  still wins, and mpv's own `hls-bitrate` is capped the same way for the case
+  where the manifest never arrives.
+- **A deep buffer earns one rung, not the top one.** A full cache stops
+  growing, so the fill rate reads ~1 even on a fast link; that is room to
+  probe, not evidence 1080p will hold. On a weak link the leap bought a stall,
+  a downshift, and the same leap again.
+- **A rung that just failed stays out of reach for a while.** A downshift caps
+  the ladder at what the link demonstrably carries, and the cap lifts one rung
+  per `ceilingRelaxTime` (45 s). Without it the deep cache made a loop: refill
+  at the low rung, climb, fail, drop, refill.
+- **A switch is no longer read as a failing link.** Re-opening a source starts
+  from an empty cache with the picture held — every network signal says
+  "collapse" for a few seconds. The whole down branch now sits out the settle
+  window (raised to 5 s), which is what stopped a single switch from walking
+  the ladder to the bottom one reload at a time. Switches are also serialised:
+  a second one cannot start while the first is still opening.
+
+### Weak devices
+
+- **Sustained dropped frames now cost a rung.** A phone that cannot decode
+  1080p in real time drops frames while the buffer stays full and every
+  network-side signal reads healthy, so the governor happily held the rung the
+  viewer was watching as a slideshow. Playora samples mpv's decoder and output
+  drop counters and steps down one rung when they exceed
+  `decoderDropTolerance` (4 frames/s) for two samples running.
+- **`videoConfiguration`** is exposed on `PlayoraPlayer`, so an Android player
+  aimed at low-end hardware can hand mpv the decoder's own surface
+  (`vo: 'mediacodec_embed'`, `hwdec: 'mediacodec'`) and skip a full-frame GPU
+  copy per frame.
+
+### Playback control
+
+- **Pause stays paused.** media_kit's `playOrPause` sends mpv a blind
+  `cycle pause`, so once its own flag and mpv's had drifted apart the pause
+  button played and the play button paused. Playora now tracks what the viewer
+  asked for and plays or pauses explicitly, and reconciles mpv whenever it
+  reports playing — or the playhead simply moves — while the intent is paused.
+- **The video stops when the screen locks.** `PlayoraPlayer` pauses on
+  `hidden`/`paused`/`detached` and never resumes by itself: coming back to
+  find the episode ran on without its viewer is worse than one tap. Turn it
+  off with `pauseOnBackground: false`.
+
+### Startup and network
+
+- **A shorter probe before the first frame.** ffmpeg analysed several seconds
+  of media before reporting the streams, and every one of those seconds was
+  black screen; `demuxer-lavf-analyzeduration` is now 1 s.
+- **Connections are reused between segment requests** (`multiple_requests=1`),
+  and a dropped one is retried within 5 s instead of backing off to 30.
+- **`network-timeout` is 15 s, not 30.** A socket that has silently died holds
+  the picture for the whole timeout before anything retries it.
+
 ## 0.6.0
 
 Quality switching you don't notice, and a much faster climb to the top rung.

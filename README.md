@@ -22,7 +22,8 @@ playlists & seasons · optional analytics + resume · Persian (RTL) & English ou
 ## Features
 
 - **HLS + MP4** — adaptive HLS or progressive MP4. Pass a list of MP4 renditions for a manual quality menu.
-- **Real adaptive quality** — mpv itself never switches HLS variants (it pins the highest one and buffers), so Playora runs its own governor: it measures how fast media actually arrives and steps the quality down when the buffer drains, back up when the link proves headroom.
+- **Real adaptive quality** — mpv exposes no tracks for an HLS master playlist: it opens one variant and stays there, however badly that goes. Playora reads the ladder from the manifest itself, opens at a rung a phone can start fast on, and runs its own governor over it — measuring how fast media actually arrives, stepping down when the buffer drains or the decoder falls behind, and back up once the link has proven headroom.
+- **Weak devices count too** — a phone that cannot decode 1080p in real time drops frames while every network signal reads healthy. Sustained decoder drops step the quality down like a failing link does.
 - **Buffers deep** — reads ahead for as long as the byte cap allows (often the rest of the episode) with a disk-backed cache, long network timeouts and transparent HTTP reconnects, so a weak connection doesn't stall playback.
 - **Custom skin** — dark, gold-accented, light mode, RTL/LTR, responsive. Layout stays physical; RTL only right-aligns text (like YouTube).
 - **Quality / speed / subtitles / audio menus** — embedded HLS subtitle and multi-language audio tracks are detected automatically; add external WebVTT/SRT subtitles on top. `qualityValidate` hides unwanted renditions.
@@ -169,9 +170,18 @@ PlayoraPlayer(
     startupHeightCeiling: 720,  // where a fresh session opens; null = the top
     minBufferAhead: Duration(seconds: 8),
     upshiftBufferAhead: Duration(seconds: 30),
+    decoderDropTolerance: 4,    // dropped frames/s that count as "too heavy"
+    ceilingRelaxTime: Duration(seconds: 45), // how fast a failed rung returns
   ),
 )
 ```
+
+For an HLS master playlist the ladder comes from the manifest — Playora fetches
+it (briefly; a slow manifest costs the ladder, never the playback) and opens the
+variant it picked, so the quality menu lists real rungs instead of a lone
+`AUTO`. A switch re-opens the chosen variant playlist at the same position; when
+the master keeps audio in its own rendition, Playora writes a one-variant master
+that carries it along, so a switch never loses the sound.
 
 The cache is backed by a file in the app's temp directory when one is
 writable — that is what allows the cap to be large without costing RAM.
@@ -232,6 +242,8 @@ PlayoraPlayer(
 | `resumeMode` | `PlayerResumeMode` | `prompt` (banner) or `auto` (open at the saved position). |
 | `buffering` | `PlayoraBufferConfig` | Read-ahead, cache caps, network timeouts, reconnects. |
 | `abr` | `PlayoraAbrConfig` | Adaptive quality governor: thresholds, cooldowns, on/off. |
+| `pauseOnBackground` | `bool` | Pause when the app leaves the foreground (screen lock, app switch). Never auto-resumes. Default on. |
+| `videoConfiguration` | `VideoControllerConfiguration` | media_kit video output. Android players on low-end hardware can pass `vo: 'mediacodec_embed', hwdec: 'mediacodec'` to skip a GPU copy per frame. |
 | `debugLogging` | `bool` | Print `[playora]` diagnostics for resume/load/ABR. |
 | `onWatchInterval` / `watchInterval` | — | External watch heartbeat + cadence (default 5s). |
 | `onPlayerReady` | `ValueChanged<PlayoraController?>` | Imperative control (seek, pause, tracks, …). |

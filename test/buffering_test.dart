@@ -70,7 +70,33 @@ void main() {
     test('network timeout is well past media_kit\'s 5 s', () {
       final props =
           const PlayoraBufferConfig.aggressive().mpvProperties();
-      expect(int.parse(props['network-timeout']!), greaterThanOrEqualTo(30));
+      final timeout = int.parse(props['network-timeout']!);
+      expect(timeout, greaterThan(5));
+      // A dead socket holds the picture for the whole timeout before anything
+      // retries it, so it cannot be long either.
+      expect(timeout, lessThanOrEqualTo(20));
+    });
+
+    test('segment connections are kept alive', () {
+      const config = PlayoraBufferConfig.aggressive();
+      expect(config.mpvProperties()['stream-lavf-o'],
+          contains('multiple_requests=1'));
+    });
+
+    test('the stream is probed briefly, not for the ffmpeg default', () {
+      final props = const PlayoraBufferConfig.aggressive().mpvProperties();
+      expect(
+        double.parse(props['demuxer-lavf-analyzeduration']!),
+        lessThanOrEqualTo(1.0),
+      );
+    });
+
+    test('the demuxer option media_kit owns is left alone', () {
+      // media_kit writes the protocol whitelist into demuxer-lavf-o, and mpv
+      // has no way to add one entry to a key/value list — assigning it would
+      // drop the whitelist and break playback.
+      final props = const PlayoraBufferConfig.aggressive().mpvProperties();
+      expect(props.containsKey('demuxer-lavf-o'), isFalse);
     });
   });
 }

@@ -9,3 +9,9 @@ Future<void> setMpvProperties(
 ) async {}
 
 Future<String?> getMpvProperty(mk.Player player, String name) async => null;
+
+Future<void> mergeMpvListProperty(
+  mk.Player player,
+  String name,
+  Map<String, String> entries,
+) async {}

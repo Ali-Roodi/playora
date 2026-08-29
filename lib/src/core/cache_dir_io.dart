@@ -26,3 +26,22 @@ Future<String?> resolveCacheDirectory(PlayoraBufferConfig config) async {
     return null;
   }
 }
+
+/// Writes [contents] to `<directory>/<name>` and returns the path, or null
+/// when it cannot be written. Backs the rewritten single-variant playlist an
+/// HLS quality switch plays from.
+Future<String?> writeCacheFile(
+  String directory,
+  String name,
+  String contents,
+) async {
+  try {
+    final dir = Directory(directory);
+    if (!await dir.exists()) await dir.create(recursive: true);
+    final file = File(dir.path + Platform.pathSeparator + name);
+    await file.writeAsString(contents, flush: true);
+    return file.path;
+  } catch (_) {
+    return null;
+  }
+}

@@ -26,6 +26,7 @@ class _Harness {
       bufferAhead: () => buffered,
       playing: () => playing,
       stalled: () => stalled,
+      overloaded: () => overloaded,
       onSwitch: (level, decision) {
         index = level.index;
         switches.add((height: level.height, decision: decision));
@@ -40,6 +41,7 @@ class _Harness {
   Duration buffered = Duration.zero;
   bool playing = true;
   bool stalled = false;
+  bool overloaded = false;
   final switches = <({int height, AbrDecision decision})>[];
 
   /// One probe interval of wall clock has to pass between samples for the
@@ -181,6 +183,40 @@ void main() {
       await h.tick(times: 3);
       expect(h.switches, isEmpty);
     });
+    test('steps down when the decoder cannot keep up on a healthy link',
+        () async {
+      // The link is fine and the buffer is deep — from the network side
+      // nothing is wrong. The phone is simply too slow for this rung, and the
+      // viewer is watching a slideshow.
+      final h = _Harness()..buffered = const Duration(seconds: 200);
+      await h.tick();
+      h.overloaded = true;
+      await h.tick();
+      expect(h.switches.single.decision, AbrDecision.down);
+      // One rung: a decoder that cannot keep up says nothing about bandwidth.
+      expect(h.switches.single.height, 480);
+    });
+
+    test('an overloaded decoder does not keep the ladder from climbing back',
+        () async {
+      final h = _Harness(
+        config: const PlayoraAbrConfig(
+          upshiftCooldown: Duration.zero,
+          downshiftCooldown: Duration.zero,
+          switchSettleTime: Duration(milliseconds: 50),
+          startupGrace: Duration.zero,
+          ceilingRelaxTime: Duration(milliseconds: 200),
+        ),
+      )..buffered = const Duration(seconds: 200);
+      await h.tick();
+      h.overloaded = true;
+      await h.tick();
+      expect(h.switches, hasLength(1));
+      h.overloaded = false;
+      await h.tick(times: 6);
+      expect(h.switches.last.decision, AbrDecision.up);
+    });
+
     test('does not act while paused', () async {
       final h = _Harness()
         ..playing = false
@@ -215,11 +251,81 @@ void main() {
       );
     });
 
-    test('startupLevel defaults to the top rung', () {
-      // Bandwidth is assumed cheap: open at the best rung and let the
-      // governor walk down if the link cannot hold it.
+    test('startupLevel opens below the top rung by default', () {
+      // Opening at 1080p means downloading its first segments before a frame
+      // appears — the slow start on a phone, and a stall on a weak link.
       final h = _Harness();
+      expect(h.governor.startupLevel(h.levels)!.height, 720);
+    });
+
+    test('startupLevel still opens at the top when the ceiling is lifted', () {
+      final h = _Harness(
+        config: const PlayoraAbrConfig(startupHeightCeiling: null),
+      );
       expect(h.governor.startupLevel(h.levels)!.height, 1080);
+    });
+
+    test('a deep buffer earns one rung, not the top one', () async {
+      // The runway rule exists because a full cache stops growing and the
+      // fill rate reads ~1 even on a fast link. That is room to probe, not
+      // evidence 1080p will hold: on a weak link the leap costs a stall, a
+      // downshift, and the same leap again.
+      final h = _Harness()
+        ..index = 0
+        ..buffered = const Duration(seconds: 200);
+      await h.tick(times: 5);
+      expect(h.switches, isNotEmpty);
+      expect(h.switches.first.decision, AbrDecision.up);
+      expect(h.switches.first.height, 480);
+    });
+
+    test('a rung that just failed is not climbed back to right away',
+        () async {
+      final h = _Harness(
+        config: const PlayoraAbrConfig(
+          upshiftCooldown: Duration.zero,
+          downshiftCooldown: Duration.zero,
+          switchSettleTime: Duration(milliseconds: 50),
+          startupGrace: Duration.zero,
+          ceilingRelaxTime: Duration(minutes: 5),
+        ),
+      )
+        ..index = 3
+        ..buffered = const Duration(seconds: 8);
+      await h.tick();
+      h.stalled = true;
+      await h.tick();
+      expect(h.switches.single.decision, AbrDecision.down);
+      final settled = h.index;
+      // The link recovers enough to look inviting again — but the rung above
+      // is the one that just failed, and the cap still holds.
+      h.stalled = false;
+      h.buffered = const Duration(seconds: 200);
+      await h.tick(times: 6);
+      expect(h.index, settled);
+      expect(h.switches, hasLength(1));
+    });
+
+    test('the cap lifts a rung at a time once the link holds', () async {
+      final h = _Harness(
+        config: const PlayoraAbrConfig(
+          upshiftCooldown: Duration.zero,
+          downshiftCooldown: Duration.zero,
+          switchSettleTime: Duration(milliseconds: 50),
+          startupGrace: Duration.zero,
+          ceilingRelaxTime: Duration(milliseconds: 200),
+        ),
+      )
+        ..index = 3
+        ..buffered = const Duration(seconds: 8);
+      await h.tick();
+      h.stalled = true;
+      await h.tick();
+      final settled = h.index;
+      h.stalled = false;
+      h.buffered = const Duration(seconds: 200);
+      await h.tick(times: 6);
+      expect(h.index, greaterThan(settled));
     });
 
     test('a disabled governor never starts its loop', () {

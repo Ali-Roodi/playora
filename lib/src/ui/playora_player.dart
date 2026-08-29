@@ -83,6 +83,8 @@ class PlayoraPlayer extends StatefulWidget {
     this.settingsKey = defaultPrefsKey,
     this.buffering,
     this.abr = const PlayoraAbrConfig(),
+    this.videoConfiguration,
+    this.pauseOnBackground = true,
     this.debugLogging = false,
     this.onBack,
     this.onLike,
@@ -226,6 +228,25 @@ class PlayoraPlayer extends StatefulWidget {
   /// Adaptive quality tuning. mpv itself never switches HLS variants, so this
   /// is what makes "Auto" actually adapt on the native backends.
   final PlayoraAbrConfig abr;
+
+  /// Video-output tuning passed straight to media_kit.
+  ///
+  /// The default (`vo=gpu`) is right almost everywhere. Android players that
+  /// have to run on low-end hardware can hand mpv the decoder's own surface
+  /// instead — `VideoControllerConfiguration(vo: 'mediacodec_embed', hwdec:
+  /// 'mediacodec')` — which skips a full-frame GPU copy per frame at the cost
+  /// of mpv-drawn overlays. Playora draws subtitles in Flutter, so that trade
+  /// mostly costs nothing.
+  final mkv.VideoControllerConfiguration? videoConfiguration;
+
+  /// Pause playback when the app leaves the foreground — the screen locks,
+  /// the viewer switches apps, a call comes in.
+  ///
+  /// Playback is never resumed automatically: coming back to find the video
+  /// has run on without its viewer is worse than one tap. Turn this off only
+  /// for a player meant to keep running in the background (audio-style
+  /// playback with its own notification).
+  final bool pauseOnBackground;
 
   /// Print `[playora]` diagnostics for the resume, buffering and adaptive
   /// quality paths. Debug builds only — it is a no-op in release.
@@ -371,6 +392,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     _controller = PlayoraController(
       buffering: widget.buffering,
       abr: widget.abr,
+      videoConfiguration: widget.videoConfiguration,
     );
     _controller.qualityValidate = widget.qualityValidate;
     _controller.debugLogging = widget.debugLogging;
@@ -411,13 +433,22 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Flush pending analytics + a final watch report when the app hides, so
-    // the last position isn't lost (the pagehide equivalent).
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached) {
-      _analyticsClient?.flush();
-      _watchReporter?.report();
+    if (state != AppLifecycleState.hidden &&
+        state != AppLifecycleState.paused &&
+        state != AppLifecycleState.detached) {
+      return;
     }
+    // The app is going away: stop the video where the viewer left it, then
+    // flush the pending analytics and a final watch report so the last
+    // position isn't lost (the pagehide equivalent). `hidden` is the earliest
+    // of the three — on a screen lock it arrives while the picture is still
+    // up, so nothing plays on into a locked phone.
+    if (widget.pauseOnBackground && _controller.state.value.playing) {
+      _log('lifecycle $state -> pause');
+      _controller.pause();
+    }
+    _analyticsClient?.flush();
+    _watchReporter?.report();
   }
 
   @override

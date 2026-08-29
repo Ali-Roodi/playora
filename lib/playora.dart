@@ -14,6 +14,8 @@ export 'src/core/abr.dart'
     show AbrDecision, AbrLevel, PlayoraAbrConfig, PlayoraAbrGovernor;
 export 'src/core/buffering.dart'
     show PlayoraBufferConfig, PlayoraBufferProfile;
+export 'src/core/hls_manifest.dart'
+    show HlsMaster, HlsRendition, HlsVariant, buildVariantPlaylist, fetchHlsMaster, parseHlsMaster;
 export 'src/core/controller.dart'
     show
         AudioOption,

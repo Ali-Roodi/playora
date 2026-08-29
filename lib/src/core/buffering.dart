@@ -39,6 +39,8 @@ class PlayoraBufferConfig {
     this.pauseUntilInitialBuffer = true,
     this.initialBufferWait = const Duration(seconds: 1),
     this.reconnect = true,
+    this.httpKeepAlive = true,
+    this.probeDuration = const Duration(seconds: 1),
   });
 
   /// Stock media_kit behaviour — no extra memory or storage pressure.
@@ -53,7 +55,9 @@ class PlayoraBufferConfig {
         streamBufferBytes = 256 * 1024,
         pauseUntilInitialBuffer = false,
         initialBufferWait = const Duration(seconds: 1),
-        reconnect = true;
+        reconnect = true,
+        httpKeepAlive = true,
+        probeDuration = const Duration(seconds: 1);
 
   /// A few minutes of read-ahead.
   const PlayoraBufferConfig.balanced()
@@ -63,11 +67,13 @@ class PlayoraBufferConfig {
         backBytes = 24 * 1024 * 1024,
         cacheOnDisk = true,
         cacheDirectory = null,
-        networkTimeout = const Duration(seconds: 30),
+        networkTimeout = const Duration(seconds: 15),
         streamBufferBytes = 512 * 1024,
         pauseUntilInitialBuffer = true,
         initialBufferWait = const Duration(seconds: 1),
-        reconnect = true;
+        reconnect = true,
+        httpKeepAlive = true,
+        probeDuration = const Duration(seconds: 1);
 
   /// Keep downloading for as long as the byte cap allows.
   const PlayoraBufferConfig.aggressive()
@@ -77,11 +83,13 @@ class PlayoraBufferConfig {
         backBytes = 64 * 1024 * 1024,
         cacheOnDisk = true,
         cacheDirectory = null,
-        networkTimeout = const Duration(seconds: 30),
+        networkTimeout = const Duration(seconds: 15),
         streamBufferBytes = 4 * 1024 * 1024,
         pauseUntilInitialBuffer = true,
         initialBufferWait = const Duration(seconds: 1),
-        reconnect = true;
+        reconnect = true,
+        httpKeepAlive = true,
+        probeDuration = const Duration(seconds: 1);
 
   factory PlayoraBufferConfig.of(PlayoraBufferProfile profile) =>
       switch (profile) {
@@ -111,7 +119,9 @@ class PlayoraBufferConfig {
   /// app's temporary directory.
   final String? cacheDirectory;
 
-  /// mpv `network-timeout`. media_kit ships 5 s, which trips on slow links.
+  /// mpv `network-timeout`. media_kit ships 5 s, which trips on slow links —
+  /// but a long one is its own stall: a socket that has silently died holds
+  /// the picture for the whole timeout before anything retries it.
   final Duration networkTimeout;
 
   /// mpv `stream-buffer-size`.
@@ -124,6 +134,28 @@ class PlayoraBufferConfig {
 
   /// Ask libavformat to transparently reconnect dropped HTTP connections.
   final bool reconnect;
+
+  /// Reuse one HTTP connection across segment requests.
+  ///
+  /// Applied at the protocol level (`stream-lavf-o`), not through mpv's
+  /// `demuxer-lavf-o`: media_kit owns that option — the protocol whitelist
+  /// lives there — and mpv has no way to add to a key/value list without
+  /// rewriting the whole of it, which loses the whitelist.
+  ///
+  /// An HLS stream is a few hundred small files. Opening a fresh TCP + TLS
+  /// connection for each of them costs a round trip pair per segment, which
+  /// on a high-latency mobile link is most of the wait — browsers keep the
+  /// connection alive, which is much of why the web player feels quicker off
+  /// the mark than the same stream in the app.
+  final bool httpKeepAlive;
+
+  /// How long libavformat may analyse the stream before playback starts.
+  ///
+  /// ffmpeg's default probes several seconds of media before it reports the
+  /// streams, and every one of those seconds is black screen. A short probe
+  /// is enough for the H.264/AAC segments an HLS ladder is made of. Null
+  /// leaves the default alone.
+  final Duration? probeDuration;
 
   /// The cap that applies before a disk-backed cache is confirmed. Passed to
   /// `PlayerConfiguration.bufferSize`, so it must stay RAM-safe.
@@ -148,13 +180,22 @@ class PlayoraBufferConfig {
       'cache-pause-wait': '${initialBufferWait.inMilliseconds / 1000}',
       'network-timeout': '${networkTimeout.inSeconds}',
       'stream-buffer-size': '$streamBufferBytes',
-      if (reconnect)
+      if (probeDuration != null)
+        'demuxer-lavf-analyzeduration':
+            '${probeDuration!.inMilliseconds / 1000}',
+      if (reconnect || httpKeepAlive)
         'stream-lavf-o': [
-          'reconnect=1',
-          'reconnect_streamed=1',
-          'reconnect_on_network_error=1',
-          'reconnect_delay_max=30',
+          if (reconnect) ...[
+            'reconnect=1',
+            'reconnect_streamed=1',
+            'reconnect_on_network_error=1',
+            // Long backoffs read to the viewer as a frozen picture; a dropped
+            // segment is worth retrying quickly.
+            'reconnect_delay_max=5',
+          ],
+          if (httpKeepAlive) 'multiple_requests=1',
         ].join(','),
     };
   }
+
 }

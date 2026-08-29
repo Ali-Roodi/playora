@@ -8,6 +8,7 @@ import '../models/types.dart';
 import 'abr.dart';
 import 'buffering.dart';
 import 'cache_dir_io.dart' if (dart.library.js_interop) 'cache_dir_web.dart';
+import 'hls_manifest.dart';
 import 'hls_compat_stub.dart'
     if (dart.library.js_interop) 'hls_compat_web.dart';
 import 'mpv_tuning_io.dart' if (dart.library.js_interop) 'mpv_tuning_web.dart';
@@ -22,14 +23,16 @@ class QualityOption {
         label = 'AUTO',
         track = null,
         renditionIndex = null,
-        hlsLevelIndex = null;
+        hlsLevelIndex = null,
+        variantIndex = null;
 
   QualityOption.track(mk.VideoTrack this.track)
       : isAuto = false,
         height = track.h,
         label = track.h != null ? '${track.h}p' : (track.title ?? track.id),
         renditionIndex = null,
-        hlsLevelIndex = null;
+        hlsLevelIndex = null,
+        variantIndex = null;
 
   const QualityOption.rendition({
     required this.label,
@@ -37,7 +40,8 @@ class QualityOption {
     this.height,
   })  : isAuto = false,
         track = null,
-        hlsLevelIndex = null;
+        hlsLevelIndex = null,
+        variantIndex = null;
 
   /// A quality level of the hls.js instance (web HLS playback only).
   const QualityOption.hlsLevel({
@@ -46,7 +50,22 @@ class QualityOption {
     this.height,
   })  : isAuto = false,
         track = null,
-        renditionIndex = null;
+        renditionIndex = null,
+        variantIndex = null;
+
+  /// One variant of an HLS master playlist, read from the manifest itself.
+  ///
+  /// mpv exposes no tracks for a master playlist — it plays whichever variant
+  /// ffmpeg opened and offers nothing to switch to — so the ladder is read
+  /// from the manifest and a switch re-opens the chosen variant playlist.
+  const QualityOption.hlsVariant({
+    required this.label,
+    required int this.variantIndex,
+    this.height,
+  })  : isAuto = false,
+        track = null,
+        renditionIndex = null,
+        hlsLevelIndex = null;
 
   final bool isAuto;
   final int? height;
@@ -54,6 +73,9 @@ class QualityOption {
   final mk.VideoTrack? track;
   final int? renditionIndex;
   final int? hlsLevelIndex;
+
+  /// Index into the HLS master playlist's variants (native HLS playback).
+  final int? variantIndex;
 }
 
 /// A selectable audio track (embedded in the stream).
@@ -236,6 +258,7 @@ class PlayoraController {
       bufferAhead: () => bufferAhead,
       playing: () => state.value.playing,
       stalled: () => state.value.buffering && state.value.started,
+      overloaded: () => _decoderOverloaded,
       onSwitch: _applyAbrLevel,
       onLog: (message) {
         if (debugLogging) debugPrint('[playora] $message');
@@ -262,6 +285,18 @@ class PlayoraController {
 
   /// Backstop that ends a quality switch the new rung never reported back on.
   Timer? _qualitySwitchTimer;
+
+  /// Samples how many frames the decoder is dropping, so a device that cannot
+  /// keep up with a rung is treated like a link that cannot carry it.
+  Timer? _decodeProbe;
+  int? _lastDropCount;
+  DateTime? _lastDropAt;
+  int _overloadTicks = 0;
+  bool _decoderOverloaded = false;
+
+  /// True while the decoder is dropping frames faster than
+  /// [PlayoraAbrConfig.decoderDropTolerance] allows.
+  bool get decoderOverloaded => _decoderOverloaded;
   String? _diskCachePath;
 
   /// Resolves once the native backend has been tuned. [load] awaits it, so
@@ -354,8 +389,39 @@ class PlayoraController {
   /// swap), so the ladder and the governor's measurements survive it.
   bool _internalReload = false;
 
+  /// True while a quality switch that re-opens the source is in flight.
+  ///
+  /// Such a switch takes seconds, and every one of them looks like a stall to
+  /// the governor. Letting a second switch start on top of the first is how a
+  /// ladder walks itself to the bottom rung while nothing ever finishes
+  /// opening.
+  bool _switching = false;
+
+  /// What the viewer (or the host) last asked for. mpv's own pause flag can
+  /// drift away from it — `cache-pause`, a track reload and media_kit's
+  /// blind `cycle pause` all touch it — and the drift is what makes a paused
+  /// video start playing again on its own. Every path that changes playback
+  /// records the intent here, and [_reconcilePause] puts mpv back in line.
+  bool _desiredPlaying = false;
+
+  /// Guard so overlapping reconciliations don't fight each other.
+  bool _reconciling = false;
+
+  /// What the viewer last asked for: true after [play], false after [pause].
+  bool get desiredPlaying => _desiredPlaying;
+
+  /// The master playlist behind the current source, when it is adaptive HLS.
+  HlsMaster? _hlsMaster;
+
+  /// Which of [HlsMaster.variants] is playing right now.
+  int? _hlsVariantIndex;
+
   /// Manual MP4 renditions of the current source, if it was opened as a list.
   List<VideoSource>? get renditions => _renditions;
+
+  /// The HLS ladder read from the master playlist, or null for a source that
+  /// isn't adaptive HLS.
+  HlsMaster? get hlsMaster => _hlsMaster;
 
   /// External subtitles registered for the current source.
   List<ExternalSubtitle> get externalSubtitles => _externalSubtitles;
@@ -366,6 +432,9 @@ class PlayoraController {
       s.playing.listen((playing) {
         _update((v) => v.copyWith(
             playing: playing, started: v.started || playing));
+        // Playing again without anyone asking: mpv and the intent have
+        // drifted apart. Put it back where the viewer left it.
+        if (playing && !_desiredPlaying) unawaited(_reconcilePause());
       }),
       s.buffering.listen((buffering) {
         // A stall is the strongest signal the governor gets — surface it
@@ -464,6 +533,16 @@ class PlayoraController {
   // -------------------------------------------------------- position throttle
 
   void _onPosition(Duration p) {
+    // The playhead advancing while the intent is "paused" is the drift the
+    // `playing` stream can miss entirely: media_kit stops reporting playback
+    // state changes after a pause, so a resume underneath it is invisible.
+    if (!_desiredPlaying && !state.value.playing) {
+      final advanced = p - _rawPosition;
+      if (advanced > const Duration(milliseconds: 400) &&
+          advanced < const Duration(seconds: 2)) {
+        unawaited(_reconcilePause());
+      }
+    }
     _rawPosition = p;
     if (positionUpdateInterval <= Duration.zero) {
       position.value = p;
@@ -510,6 +589,26 @@ class PlayoraController {
     }
     // Web HLS has hls.js's own ABR; don't fight it.
     if (webHlsLevels().isNotEmpty) return const [];
+    final master = _hlsMaster;
+    if (master != null) {
+      final variants = _selectableVariants(master);
+      if (variants.length < 2) return const [];
+      return [
+        for (var i = 0; i < variants.length; i++)
+          (
+            level: AbrLevel(
+              index: i,
+              height: variants[i].variant.height ?? 0,
+              bitrate: variants[i].variant.plannedBitrate,
+            ),
+            option: QualityOption.hlsVariant(
+              label: variants[i].variant.label,
+              variantIndex: variants[i].index,
+              height: variants[i].variant.height,
+            ),
+          ),
+      ];
+    }
     final options = qualityOptions(validate: qualityValidate)
         .where((o) => !o.isAuto && o.height != null)
         .toList()
@@ -527,10 +626,40 @@ class PlayoraController {
     ];
   }
 
+  /// The variants the quality menu and the ladder may use, paired with their
+  /// index in the master playlist. Ascending by bitrate, [qualityValidate]
+  /// applied, one entry per height.
+  List<({int index, HlsVariant variant})> _selectableVariants(
+    HlsMaster master,
+  ) {
+    final seen = <int>{};
+    final result = <({int index, HlsVariant variant})>[];
+    for (var i = 0; i < master.variants.length; i++) {
+      final variant = master.variants[i];
+      final height = variant.height;
+      if (height != null) {
+        if (qualityValidate != null && !qualityValidate!(height)) continue;
+        if (!seen.add(height)) continue;
+      }
+      result.add((index: i, variant: variant));
+    }
+    return result;
+  }
+
   int? _currentLadderIndex() {
     if (!_autoQuality) return null;
     final ladder = _ladder();
     if (ladder.isEmpty) return null;
+    final master = _hlsMaster;
+    if (master != null) {
+      final current = _hlsVariantIndex;
+      if (current == null) return null;
+      final variants = _selectableVariants(master);
+      for (var i = 0; i < variants.length; i++) {
+        if (variants[i].index == current) return i;
+      }
+      return null;
+    }
     final renditions = _renditions;
     if (renditions != null) {
       final height = renditions[
@@ -566,7 +695,12 @@ class PlayoraController {
       rememberedHeight: preferredStartHeight,
     );
     if (target == null) return;
-    if (_currentLadderIndex() == target.index) return;
+    // The seed is a ceiling, not an exact pick: `hls-bitrate` has usually
+    // already opened the stream at or below it, and switching to land exactly
+    // on the target would cost a visible hitch in the first seconds to gain
+    // one rung the governor climbs to on its own anyway.
+    final opened = _currentLadderIndex();
+    if (opened != null && opened <= target.index) return;
     _applyAbrLevel(target, AbrDecision.hold);
   }
 
@@ -593,7 +727,10 @@ class PlayoraController {
   }
 
   void _applyAbrLevel(AbrLevel level, AbrDecision decision) {
-    if (_disposed) return;
+    if (_disposed || _switching) return;
+    // The new rung decodes at its own cost; the old rung's drop history says
+    // nothing about it.
+    _resetDecodeSample();
     final ladder = _ladder();
     final entry = ladder
         .where((e) => e.level.index == level.index)
@@ -605,6 +742,81 @@ class PlayoraController {
     onAutoHeightChanged?.call(entry.level.height);
     // Keep `_autoQuality` on — this is the governor moving, not the viewer.
     unawaited(_applyQuality(entry.option));
+  }
+
+  /// Fetches and parses the master playlist for [url], or null when it isn't
+  /// an adaptive HLS source. The fetch is bounded: a slow manifest costs the
+  /// ladder, never the playback.
+  Future<HlsMaster?> _resolveHlsMaster(String url) async {
+    if (!mpvTuningSupported || !abrConfig.enabled) return null;
+    if (webHlsLevels().isNotEmpty) return null;
+    if (!url.contains('.m3u8')) return null;
+    return fetchHlsMaster(url, timeout: abrConfig.manifestTimeout);
+  }
+
+  /// The variant a fresh source should open at: the remembered height from a
+  /// previous session, else the startup ceiling, else the top rung.
+  int? _startupVariant(HlsMaster master) {
+    final variants = _selectableVariants(master);
+    if (variants.length < 2) return null;
+    final ladder = [
+      for (var i = 0; i < variants.length; i++)
+        AbrLevel(
+          index: i,
+          height: variants[i].variant.height ?? 0,
+          bitrate: variants[i].variant.plannedBitrate,
+        ),
+    ];
+    final level = _governor.startupLevel(
+      ladder,
+      rememberedHeight: preferredStartHeight,
+    );
+    if (level == null) return null;
+    return variants[level.index.clamp(0, variants.length - 1)].index;
+  }
+
+  /// What to hand mpv for [variantIndex].
+  ///
+  /// A muxed variant playlist can be played directly. When the master keeps
+  /// audio (or subtitles) in their own renditions, the variant on its own
+  /// would come up silent, so a one-variant master that still carries them is
+  /// written next to the cache and played from there.
+  Future<String?> _mediaUrlForVariant(HlsMaster master, int variantIndex) async {
+    final variant = master.variants[variantIndex.clamp(0, master.variants.length - 1)];
+    if (master.renditions.isEmpty) return variant.url;
+    final directory = _diskCachePath;
+    if (directory == null) {
+      // No writable directory for the rewritten playlist: a silent stream is
+      // worse than an unswitchable one.
+      return master.hasSeparateAudio ? null : variant.url;
+    }
+    final path = await writeCacheFile(
+      directory,
+      'playora_variant_${master.url.hashCode.toUnsigned(32)}_$variantIndex.m3u8',
+      buildVariantPlaylist(master, variant),
+    );
+    return path ?? (master.hasSeparateAudio ? null : variant.url);
+  }
+
+  /// Caps the HLS variant mpv opens with.
+  ///
+  /// Left alone, mpv takes the highest variant of a master playlist and only
+  /// lets go of it once the ladder has been seeded — which happens after the
+  /// track list arrives, i.e. after the first segments of the *top* rendition
+  /// have already been fetched. On a phone that is the slow start the viewer
+  /// sees, and on a weak link it is a stall followed by a switch that was
+  /// avoidable. Opening at the rung the governor would pick anyway costs
+  /// nothing and skips both.
+  Future<void> _applyStartupBitrateCap() async {
+    if (!mpvTuningSupported || !abrConfig.enabled) return;
+    final height = preferredStartHeight ?? abrConfig.startupHeightCeiling;
+    if (height == null) return;
+    // Manifests advertise peak bandwidth, comfortably above the average a
+    // rendition actually costs, so the cap is generous — its job is to keep
+    // the top rung out of the opening pick, not to pick the rung itself.
+    final ceiling =
+        (AbrLevel(index: 0, height: height).weight * 1.6).round();
+    await setMpvProperties(player, {'hls-bitrate': '$ceiling'});
   }
 
   /// Open a source. Either a single [url] (HLS/MP4) or a list of MP4
@@ -623,9 +835,29 @@ class PlayoraController {
     await ready;
     if (_disposed) return;
     _pendingSeek = null; // a parked seek belongs to the previous source
+    _desiredPlaying = play;
     _renditions = renditions;
     _externalSubtitles = externalSubtitles;
-    final target = url ?? renditions![renditionIndex].src;
+    var target = url ?? renditions![renditionIndex].src;
+    // A master playlist is a ladder mpv cannot climb: ffmpeg opens one of its
+    // variants (in practice the first one listed, often the largest) and mpv
+    // exposes no tracks to switch between. Read the ladder from the manifest
+    // instead and open the rung this device and link can actually carry.
+    if (url != null && !_internalReload) {
+      _hlsMaster = null;
+      _hlsVariantIndex = null;
+      final master = await _resolveHlsMaster(url);
+      if (_disposed) return;
+      if (master != null) {
+        _hlsMaster = master;
+        final opening = _startupVariant(master);
+        if (opening != null) {
+          _hlsVariantIndex = opening;
+          _startupLevelApplied = true;
+          target = await _mediaUrlForVariant(master, opening) ?? target;
+        }
+      }
+    }
     // Reset per-source state before the new media reports in.
     state.value = state.value.copyWith(
       started: false,
@@ -641,31 +873,140 @@ class PlayoraController {
       // A genuinely new source: forget the old ladder and measurements. A
       // rendition swap driven by the governor keeps both — including the
       // switch window that is hiding its re-buffer.
-      _startupLevelApplied = false;
+      // The variant chosen from the manifest above is the seed; nothing has
+      // to be picked once the (empty) HLS track list arrives.
+      _startupLevelApplied = _hlsMaster != null;
       _governor.reset();
+      _resetDecodeSample();
       _endQualitySwitch();
     }
+    await _applyStartupBitrateCap();
     await player.open(
       mk.Media(target, start: startAt),
       play: play,
     );
     _governor.start();
+    _startDecodeProbe();
     final def = externalSubtitles.where((e) => e.isDefault).firstOrNull;
     if (def != null) await selectExternalSubtitle(def);
   }
 
+  // ----------------------------------------------------------- decode health
+
+  void _startDecodeProbe() {
+    if (!mpvTuningSupported || !abrConfig.enabled || _decodeProbe != null) {
+      return;
+    }
+    _decodeProbe = Timer.periodic(
+      abrConfig.probeInterval,
+      (_) => unawaited(_sampleDecodeHealth()),
+    );
+  }
+
+  void _resetDecodeSample() {
+    _lastDropCount = null;
+    _lastDropAt = null;
+    _overloadTicks = 0;
+    _decoderOverloaded = false;
+  }
+
+  /// Reads mpv's dropped-frame counters and turns them into a rate.
+  ///
+  /// Both counters matter: the decoder drops frames it cannot decode in time,
+  /// the video output drops frames that arrive too late to show. Either way
+  /// the viewer is watching a slideshow of a rendition this device cannot
+  /// carry.
+  Future<void> _sampleDecodeHealth() async {
+    if (_disposed) return;
+    final playback = state.value;
+    if (!playback.playing || playback.buffering || playback.switchingQuality) {
+      _resetDecodeSample();
+      return;
+    }
+    final decoder = await getMpvProperty(player, 'decoder-frame-drop-count');
+    final output = await getMpvProperty(player, 'frame-drop-count');
+    if (_disposed) return;
+    if (decoder == null && output == null) {
+      // No counters on this build — leave the device out of the decision.
+      _decodeProbe?.cancel();
+      _decodeProbe = null;
+      _resetDecodeSample();
+      return;
+    }
+    final total =
+        (int.tryParse(decoder ?? '') ?? 0) + (int.tryParse(output ?? '') ?? 0);
+    final now = DateTime.now();
+    final lastCount = _lastDropCount;
+    final lastAt = _lastDropAt;
+    _lastDropCount = total;
+    _lastDropAt = now;
+    if (lastCount == null || lastAt == null) return;
+    final elapsed = now.difference(lastAt).inMilliseconds / 1000;
+    if (elapsed <= 0.25) return;
+    // A counter that went backwards belongs to a different file.
+    final dropped = total - lastCount;
+    if (dropped < 0) {
+      _resetDecodeSample();
+      return;
+    }
+    final rate = dropped / elapsed;
+    _overloadTicks =
+        rate > abrConfig.decoderDropTolerance ? _overloadTicks + 1 : 0;
+    // Two samples in a row, so one late frame after a seek cannot cost a rung.
+    final overloaded = _overloadTicks >= 2;
+    if (overloaded != _decoderOverloaded) {
+      _decoderOverloaded = overloaded;
+      if (debugLogging) {
+        debugPrint('[playora] decoder overloaded=$overloaded '
+            '(${rate.toStringAsFixed(1)} dropped frames/s)');
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- playback
 
-  Future<void> play() => player.play();
+  Future<void> play() async {
+    _desiredPlaying = true;
+    await player.play();
+  }
 
   Future<void> pause() async {
+    _desiredPlaying = false;
     await player.pause();
     // Land the exact playhead the viewer stopped at — resume points are read
     // straight off [position].
     _flushPosition();
+    // mpv can come back out of a pause on its own (a cache refill or a track
+    // reload landing on top of the request); confirm it actually stopped.
+    unawaited(_reconcilePause());
   }
 
-  Future<void> togglePlay() => player.playOrPause();
+  /// Play/pause from the intent, not from a blind toggle.
+  ///
+  /// media_kit's `playOrPause` sends mpv `cycle pause`, which flips whatever
+  /// mpv happens to hold — so once its own flag and mpv's have drifted apart,
+  /// the pause button plays and the play button pauses.
+  Future<void> togglePlay() => _desiredPlaying ? pause() : play();
+
+  /// Forces mpv back to a paused state when it drifted out of one.
+  Future<void> _reconcilePause() async {
+    if (_disposed || _desiredPlaying || _reconciling) return;
+    _reconciling = true;
+    try {
+      final paused = await getMpvProperty(player, 'pause');
+      if (_disposed || _desiredPlaying) return;
+      // Null means the platform has no mpv to ask (web) — trust media_kit
+      // there and only act on a definite "still running".
+      if (paused == 'no') {
+        await setMpvProperties(player, {'pause': 'yes'});
+        if (_disposed || _desiredPlaying) return;
+        _update((v) => v.copyWith(playing: false));
+        _flushPosition();
+      }
+    } finally {
+      _reconciling = false;
+    }
+  }
 
   /// Seek and record the jump for analytics.
   Future<void> seek(Duration to) async {
@@ -728,6 +1069,21 @@ class PlayoraController {
         if (supportsAutoQuality) const QualityOption.auto(),
       ];
     }
+    final master = _hlsMaster;
+    if (master != null) {
+      final variants = _selectableVariants(master);
+      if (variants.length > 1) {
+        return [
+          for (final entry in variants.reversed)
+            QualityOption.hlsVariant(
+              label: entry.variant.label,
+              variantIndex: entry.index,
+              height: entry.variant.height,
+            ),
+          const QualityOption.auto(),
+        ];
+      }
+    }
     // Web HLS: mpv track lists stay empty; read the hls.js levels instead.
     final webLevels = webHlsLevels();
     if (webLevels.isNotEmpty) {
@@ -770,6 +1126,7 @@ class PlayoraController {
   /// auto mode: mpv itself has no ABR, it just pins the highest HLS variant.
   bool get isAutoQuality {
     if (webHlsLevels().isNotEmpty) return webHlsAutoEnabled();
+    if (_hlsMaster != null) return _autoQuality && abrConfig.enabled;
     if (_renditions != null) {
       return _autoQuality &&
           abrConfig.enabled &&
@@ -795,6 +1152,15 @@ class PlayoraController {
   /// Label for the quality button — the manual rendition's label, the selected
   /// track's height, or AUTO.
   String get qualityLabel {
+    final master = _hlsMaster;
+    if (master != null) {
+      if (isAutoQuality) return 'AUTO';
+      final index = _hlsVariantIndex;
+      if (index != null && index >= 0 && index < master.variants.length) {
+        return master.variants[index].label;
+      }
+      return 'AUTO';
+    }
     final renditions = _renditions;
     if (renditions != null) {
       if (isAutoQuality) return 'AUTO';
@@ -825,6 +1191,11 @@ class PlayoraController {
     // screen and the spinner is the honest answer.
     if (state.value.started) _beginQualitySwitch();
     _autoQuality = option.isAuto;
+    if (option.isAuto && _hlsMaster != null && abrConfig.enabled) {
+      // The governor picks up from whatever variant is playing.
+      _governor.reset();
+      return;
+    }
     if (option.isAuto && abrConfig.enabled && webHlsLevels().isEmpty) {
       _governor.reset();
       _startupLevelApplied = false;
@@ -857,6 +1228,40 @@ class PlayoraController {
       } finally {
         _internalReload = false;
       }
+      if (active != null) await selectExternalSubtitle(active);
+      return;
+    }
+    if (option.variantIndex != null) {
+      final master = _hlsMaster;
+      if (master == null || _switching) return;
+      final index = option.variantIndex!.clamp(0, master.variants.length - 1);
+      if (index == _hlsVariantIndex) return;
+      final url = await _mediaUrlForVariant(master, index);
+      if (url == null || _disposed) return;
+      // Same shape as an MP4 rendition swap: re-open the other playlist and
+      // put the playhead and the play state back where they were.
+      final at = position.value;
+      final wasPlaying = _desiredPlaying;
+      final subs = _externalSubtitles;
+      final active = state.value.activeExternalSubtitle;
+      _hlsVariantIndex = index;
+      _internalReload = true;
+      _switching = true;
+      try {
+        await load(
+          url: url,
+          externalSubtitles: subs,
+          startAt: at,
+          play: wasPlaying,
+        );
+      } finally {
+        _internalReload = false;
+        _switching = false;
+      }
+      // The settle window starts now, not when the switch was decided: what
+      // it has to cover is the new rung filling its cache.
+      _governor.noteSwitchSettled();
+      _beginQualitySwitch();
       if (active != null) await selectExternalSubtitle(active);
       return;
     }
@@ -949,6 +1354,7 @@ class PlayoraController {
     if (_disposed) return;
     _disposed = true;
     _governor.dispose();
+    _decodeProbe?.cancel();
     _qualitySwitchTimer?.cancel();
     _positionFlush?.cancel();
     for (final sub in _subs) {
