@@ -46,6 +46,8 @@ class PlayoraPlayer extends StatefulWidget {
     this.vodType = VodProvider.standard,
     this.vodCustomUrl,
     this.qualityValidate,
+    this.qualityPolicy,
+    this.contentKey,
     this.title,
     this.episodeLabel,
     this.poster,
@@ -113,6 +115,17 @@ class PlayoraPlayer extends StatefulWidget {
   /// Hide embedded (HLS) qualities whose height fails this predicate (e.g.
   /// drop sub-400p renditions). Auto stays available.
   final bool Function(int height)? qualityValidate;
+
+  /// How Auto trades data for picture — e.g. open on 1080p and never drop
+  /// under 720p. Null keeps the bandwidth-first default. The quality menu
+  /// still lists every rendition the viewer may pick by hand.
+  final PlayoraQualityPolicy? qualityPolicy;
+
+  /// Identity of the title being played. Changing it (together with [src])
+  /// swaps the title in place: a fresh ad schedule, resume offer and watch
+  /// session, playback starting right away, and fullscreen kept. Without it a
+  /// new [src] is treated as the same title re-sourced.
+  final String? contentKey;
   final String? title;
 
   /// e.g. "قسمت سوم".
@@ -290,8 +303,19 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   ThumbnailTrack? _thumbnailTrack;
   int _loadGeneration = 0;
 
+  // Early ends: a stream that drops mid-title reports itself as finished.
+  static const _earlyEndSlack = Duration(seconds: 10);
+  static const _earlyEndRetries = 3;
+  int _earlyEnds = 0;
+  Duration? _lastEarlyEndAt;
+
   // Cover.
   bool _coverDismissed = false;
+
+  /// The start is waiting for [PlayoraPlayer.loading] to clear, and whether
+  /// it then plays regardless of [PlayoraPlayer.autoPlay] (a title switch).
+  bool _startHeld = false;
+  bool? _heldPlay;
 
   // Ads.
   List<_PositionedAdBreak> _adBreaks = const [];
@@ -397,6 +421,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       videoConfiguration: widget.videoConfiguration,
     );
     _controller.qualityValidate = widget.qualityValidate;
+    _controller.qualityPolicy = widget.qualityPolicy;
     _controller.debugLogging = widget.debugLogging;
     _controller.onAutoHeightChanged = _onAutoHeightChanged;
     _prefsStore = PlayerPrefsStore(widget.settingsKey);
@@ -466,6 +491,26 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       if (mounted) _revision.value++;
     });
 
+    _controller.qualityValidate = widget.qualityValidate;
+    _controller.qualityPolicy = widget.qualityPolicy;
+    if (old.settingsKey != widget.settingsKey) {
+      _prefsStore = PlayerPrefsStore(widget.settingsKey);
+    }
+
+    if (old.contentKey != null &&
+        widget.contentKey != null &&
+        old.contentKey != widget.contentKey) {
+      _switchContent();
+      return;
+    }
+
+    if (_startHeld) {
+      if (!widget.loading) _releaseHeldStart();
+      // Nothing has been loaded yet; the start picks up whatever the host
+      // hands over by then.
+      return;
+    }
+
     if (old.ad != widget.ad || !listEquals(old.ads, widget.ads)) {
       // A new ad schedule (e.g. the host refetched ads for a new episode)
       // starts a fresh played-state; the old one belonged to the old list.
@@ -483,10 +528,6 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
         }
       }
     }
-    if (old.settingsKey != widget.settingsKey) {
-      _prefsStore = PlayerPrefsStore(widget.settingsKey);
-    }
-
     // Restriction appeared → pause immediately.
     if (widget.restriction != null && old.restriction == null) {
       _controller.pause();
@@ -591,7 +632,22 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   Future<void> _bootstrap() async {
     if (widget.persistSettings) await _restorePrefs();
     if (widget.muted) await _controller.mute();
+    if (!mounted) return;
 
+    // The host is still fetching what playback depends on — typically the ad
+    // schedule. Starting now would let the film run and a late pre-roll cut
+    // in and restart it, so the start waits for [PlayoraPlayer.loading].
+    if (widget.loading) {
+      if (widget.autoPlay) _coverDismissed = true;
+      _startHeld = true;
+      return;
+    }
+    await _start();
+  }
+
+  /// Starts playback of the current title: its pre-roll first, if any.
+  Future<void> _start({bool? play}) async {
+    final shouldPlay = play ?? widget.autoPlay;
     final pre = _nextPendingAd((b) => b.brk.offset.isPre);
     if (pre != null) {
       _coverDismissed = true;
@@ -600,11 +656,60 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       await _playAd(pre);
       return;
     }
-    if (widget.autoPlay) {
+    if (shouldPlay) {
       _coverDismissed = true;
       _maybeFullscreenOnAutoStart();
     }
-    await _loadContent(play: widget.autoPlay);
+    await _loadContent(play: shouldPlay);
+  }
+
+  /// [PlayoraPlayer.contentKey] changed: another title takes over this
+  /// player. Nothing of the previous one carries over — not its ads, its
+  /// resume offer or its watch session — but the surface, fullscreen
+  /// included, stays exactly where it is.
+  void _switchContent() {
+    _log('content -> ${widget.contentKey}');
+    _awaitingHostSource = false;
+    _pendingEpisodePlay = false;
+    _forcePlayNext = false;
+    _episodeId = _episode?.id;
+    _loadedEpisodeId = null;
+    _resumeFetched = false;
+    _resumePoint = null;
+    _resumeAfterAd = null;
+    _contentEnd = Duration.zero;
+    _earlyEnds = 0;
+    _lastEarlyEndAt = null;
+    _adBreaks = _normalizeAdBreaks();
+    _playedAds.clear();
+    _controller.contentEnded.value = false;
+    if (_activeAd != null) {
+      _activeAd = null;
+      _controller.adPlaying.value = false;
+    }
+    _coverDismissed = true;
+    _vodLoading = false;
+    _setupAnalytics();
+    if (widget.loading) {
+      _startHeld = true;
+      _heldPlay = true;
+      _controller.pause();
+      setState(() {});
+      return;
+    }
+    setState(() {});
+    unawaited(_start(play: true));
+  }
+
+  /// [PlayoraPlayer.loading] cleared while the start was held for it.
+  void _releaseHeldStart() {
+    final play = _heldPlay;
+    _startHeld = false;
+    _heldPlay = null;
+    _episodeId = _episode?.id;
+    _adBreaks = _normalizeAdBreaks();
+    _playedAds.clear();
+    unawaited(_start(play: play));
   }
 
   Future<void> _restorePrefs() async {
@@ -743,6 +848,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
 
   Future<void> _loadContent({bool play = false, Duration? startAt}) async {
     final generation = ++_loadGeneration;
+    _controller.contentEnded.value = false;
     var start = startAt;
     if (start == null && widget.resumeMode == PlayerResumeMode.auto) {
       start = await _autoResumeStart();
@@ -848,12 +954,18 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     if (resumeAt != null) {
       // Pre/mid-roll → restore the content position and keep playing.
       await _loadContent(play: true, startAt: resumeAt);
+    } else if (_hasNext) {
+      // Post-roll of an episode with a next one → on to it, exactly as an
+      // episode without a post-roll would have gone.
+      _forcePlayNext = true;
+      widget.onEpisodeChange?.call(_nextEpisode!.id);
     } else {
       // Post-roll → the content stays ended (last frame, paused).
       await _loadContent(
         play: false,
         startAt: _contentEnd > Duration.zero ? _contentEnd : null,
       );
+      if (mounted && _activeAd == null) _controller.contentEnded.value = true;
     }
     _tracker?.resumeTracking();
     _watchReporter?.resume();
@@ -879,6 +991,7 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
       _endAd();
       return;
     }
+    if (_recoverEarlyEnd()) return;
     final post = _nextPendingAd((b) => b.brk.offset.isPost);
     if (post != null) {
       _resumeAfterAd = null; // content stays ended after a post-roll
@@ -890,7 +1003,33 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
     if (_hasNext) {
       _forcePlayNext = true;
       widget.onEpisodeChange?.call(_nextEpisode!.id);
+      return;
     }
+    _controller.contentEnded.value = true;
+  }
+
+  /// mpv reports a dropped connection on a VOD stream as the end of the file.
+  /// A finish well short of the duration is that, not the credits: reopen at
+  /// the playhead instead of running the post-roll, the next episode or the
+  /// end screen. Repeated drops at the same spot give up and end normally.
+  bool _recoverEarlyEnd() {
+    final duration = _controller.duration.value;
+    final position = _controller.position.value;
+    if (duration <= Duration.zero ||
+        duration - position <= _earlyEndSlack ||
+        position >= duration * 0.98) {
+      return false;
+    }
+    final last = _lastEarlyEndAt;
+    if (last == null || (position - last).abs() > const Duration(minutes: 1)) {
+      _earlyEnds = 0;
+    }
+    if (_earlyEnds >= _earlyEndRetries) return false;
+    _earlyEnds++;
+    _lastEarlyEndAt = position;
+    _log('early end at $position of $duration -> reopening');
+    unawaited(_loadContent(play: true, startAt: position));
+    return true;
   }
 
   // ------------------------------------------------------------------- state
@@ -898,6 +1037,9 @@ class PlayoraPlayerState extends State<PlayoraPlayer>
   void _onPlaybackState() {
     final state = _controller.state.value;
     if (_activeAd == null) _wasPlaying = state.playing;
+    if (state.playing && _activeAd == null && _controller.contentEnded.value) {
+      _controller.contentEnded.value = false;
+    }
 
     // A restriction blocks playback — keep it paused (guards autoplay).
     if (widget.restriction != null && state.playing) {

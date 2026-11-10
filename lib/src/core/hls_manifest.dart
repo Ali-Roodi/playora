@@ -86,7 +86,7 @@ class HlsMaster {
 
 /// Parses [body] as a master playlist, or returns null when it isn't one — a
 /// media playlist, an MP4, an error page, a ladder with a single rung.
-HlsMaster? parseHlsMaster(String body, String url) {
+HlsMaster? parseHlsMaster(String body, String url, {int minVariants = 2}) {
   if (!body.contains('#EXTM3U')) return null;
   if (!body.contains('#EXT-X-STREAM-INF')) return null;
   final base = Uri.tryParse(url);
@@ -140,7 +140,7 @@ HlsMaster? parseHlsMaster(String body, String url) {
       attributes: raw,
     ));
   }
-  if (variants.length < 2) return null;
+  if (variants.length < minVariants) return null;
   variants.sort((a, b) => a.plannedBitrate.compareTo(b.plannedBitrate));
   return HlsMaster(url: url, variants: variants, renditions: renditions);
 }

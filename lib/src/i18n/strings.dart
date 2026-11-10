@@ -38,6 +38,7 @@ class PlayerStrings {
     required this.adLabel,
     required this.back,
     required this.loading,
+    this.slowLoading,
     required this.retry,
     required this.exit,
     required this.captions,
@@ -85,6 +86,11 @@ class PlayerStrings {
   final String adLabel;
   final String back;
   final String loading;
+
+  /// Replaces [loading] once playback has been pending for a while, so a
+  /// slow start reads as a slow connection rather than a dead player. Falls
+  /// back to [loading] when null.
+  final String? slowLoading;
   final String retry;
   final String exit;
   final String captions;
@@ -125,6 +131,7 @@ class PlayerStrings {
     adLabel: 'آگهی',
     back: 'بازگشت',
     loading: 'لطفاً صبر کنید …',
+    slowLoading: 'اتصال کند است، در حال بارگذاری …',
     retry: 'تلاش مجدد',
     exit: 'خروج',
     captions: 'زیرنویس',
@@ -166,6 +173,7 @@ class PlayerStrings {
     adLabel: 'Ad',
     back: 'Back',
     loading: 'Please wait …',
+    slowLoading: 'Slow connection, still loading …',
     retry: 'Retry',
     exit: 'Exit',
     captions: 'Subtitles',

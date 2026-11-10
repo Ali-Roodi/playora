@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -6,13 +8,18 @@ import '../../models/types.dart';
 import '../../theme/player_theme.dart';
 
 /// Buffering / loading spinner with the "please wait" caption.
-class LoadingSpinner extends StatelessWidget {
+///
+/// A wait that outlasts [slowAfter] swaps the caption for
+/// [PlayerStrings.slowLoading]: past that point the viewer is better told the
+/// connection is slow than left wondering whether the player died.
+class LoadingSpinner extends StatefulWidget {
   const LoadingSpinner({
     super.key,
     required this.theme,
     required this.strings,
     this.scrim = false,
     this.progress,
+    this.slowAfter = const Duration(seconds: 6),
   });
 
   final PlayoraTheme theme;
@@ -26,8 +33,39 @@ class LoadingSpinner extends StatelessWidget {
   /// rather than as a frozen player.
   final ValueListenable<double>? progress;
 
+  /// How long the spinner may stay up before the caption says the
+  /// connection is slow.
+  final Duration slowAfter;
+
+  @override
+  State<LoadingSpinner> createState() => _LoadingSpinnerState();
+}
+
+class _LoadingSpinnerState extends State<LoadingSpinner> {
+  Timer? _slowTimer;
+  bool _slow = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _slowTimer = Timer(widget.slowAfter, () {
+      if (mounted) setState(() => _slow = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _slowTimer?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final strings = widget.strings;
+    final progress = widget.progress;
+    final caption =
+        _slow ? (strings.slowLoading ?? strings.loading) : strings.loading;
     final spinner = Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -42,7 +80,7 @@ class LoadingSpinner extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            strings.loading,
+            caption,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 13,
@@ -51,7 +89,7 @@ class LoadingSpinner extends StatelessWidget {
           ),
           if (progress != null)
             ValueListenableBuilder<double>(
-              valueListenable: progress!,
+              valueListenable: progress,
               builder: (context, value, _) {
                 if (value <= 0 || value >= 100) return const SizedBox.shrink();
                 return Padding(
@@ -73,7 +111,7 @@ class LoadingSpinner extends StatelessWidget {
         ],
       ),
     );
-    if (!scrim) return IgnorePointer(child: spinner);
+    if (!widget.scrim) return IgnorePointer(child: spinner);
     return Positioned.fill(
       child: ColoredBox(
         color: Colors.black.withValues(alpha: 0.45),

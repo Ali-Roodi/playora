@@ -270,6 +270,7 @@ class PlayoraController {
       playing: () => state.value.playing && _progressing,
       stalled: () => state.value.buffering && state.value.started,
       overloaded: () => _decoderOverloaded,
+      policy: () => qualityPolicy,
       onSwitch: _applyAbrLevel,
       onLog: (message) {
         if (debugLogging) debugPrint('[playora] $message');
@@ -356,6 +357,9 @@ class PlayoraController {
   /// predicate the quality menu uses.
   bool Function(int height)? qualityValidate;
 
+  /// How Auto trades data for picture. Null is the bandwidth-first default.
+  PlayoraQualityPolicy? qualityPolicy;
+
   /// Tallest rung worth streaming, in pixels — normally the height of the
   /// video surface on screen.
   ///
@@ -390,6 +394,12 @@ class PlayoraController {
   /// True while an ad break is on screen. [position] then belongs to the ad,
   /// not to the content — hosts reporting a watch position must skip those.
   final ValueNotifier<bool> adPlaying = ValueNotifier(false);
+
+  /// True once the content has played to its end and nothing follows it in
+  /// the player: no post-roll left and no next episode to advance to. It
+  /// turns false again as soon as playback resumes (a replay, a seek back) or
+  /// another source loads — the cue for a host's "watch next" screen.
+  final ValueNotifier<bool> contentEnded = ValueNotifier(false);
 
   /// Current subtitle cue lines (empty when none). Rendered by the skin.
   final ValueNotifier<List<String>> subtitleCues = ValueNotifier(const []);
@@ -501,6 +511,18 @@ class PlayoraController {
   /// The HLS ladder read from the master playlist, or null for a source that
   /// isn't adaptive HLS.
   HlsMaster? get hlsMaster => _hlsMaster;
+
+  /// The URL the current source was opened from: the master playlist for
+  /// adaptive HLS, the active rendition for a manual MP4 list.
+  String? get sourceUrl {
+    final list = _renditions;
+    if (list != null && list.isNotEmpty) {
+      return list[state.value.renditionIndex.clamp(0, list.length - 1)].src;
+    }
+    return _sourceUrl;
+  }
+
+  String? _sourceUrl;
 
   /// External subtitles registered for the current source.
   List<ExternalSubtitle> get externalSubtitles => _externalSubtitles;
@@ -815,17 +837,24 @@ class PlayoraController {
     final ladder = _ladder();
     if (ladder.length < 2) return;
     _startupLevelApplied = true;
+    final levels = [for (final entry in ladder) entry.level];
     final target = _governor.startupLevel(
-      [for (final entry in ladder) entry.level],
+      levels,
       rememberedHeight: preferredStartHeight,
     );
     if (target == null) return;
     // The seed is a ceiling, not an exact pick: `hls-bitrate` has usually
     // already opened the stream at or below it, and switching to land exactly
     // on the target would cost a visible hitch in the first seconds to gain
-    // one rung the governor climbs to on its own anyway.
+    // one rung the governor climbs to on its own anyway. A host policy is the
+    // exception — it asked for that rung and for nothing under its floor.
     final opened = _currentLadderIndex();
-    if (opened != null && opened <= target.index) return;
+    final exact = qualityPolicy?.startHeight != null;
+    if (opened != null &&
+        (exact ? opened == target.index : opened <= target.index) &&
+        opened >= _governor.floorIndex(levels)) {
+      return;
+    }
     _applyAbrLevel(target, AbrDecision.hold);
   }
 
@@ -1001,6 +1030,7 @@ class PlayoraController {
     _renditions = renditions;
     _externalSubtitles = externalSubtitles;
     var target = url ?? renditions![renditionIndex].src;
+    if (!_internalReload) _sourceUrl = url;
     // A master playlist is a ladder mpv cannot climb: ffmpeg opens one of its
     // variants (in practice the first one listed, often the largest) and mpv
     // exposes no tracks to switch between. Read the ladder from the manifest
@@ -1261,7 +1291,10 @@ class PlayoraController {
       if (!_desiredPlaying) return;
       final ladder = _ladder();
       final index = _currentLadderIndex();
-      if (ladder.isEmpty || index == null || index <= 0) return;
+      if (ladder.isEmpty || index == null) return;
+      final floor =
+          _governor.floorIndex([for (final entry in ladder) entry.level]);
+      if (index <= floor) return;
       if (debugLogging) {
         debugPrint('[playora] no playback in '
             '${abrConfig.openRescueTime.inSeconds}s -> down a rung');
@@ -1778,6 +1811,7 @@ class PlayoraController {
     buffer.dispose();
     bufferingPercent.dispose();
     adPlaying.dispose();
+    contentEnded.dispose();
     subtitleCues.dispose();
     await player.dispose();
   }

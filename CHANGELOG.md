@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.8.0
+
+Picture first: Auto opens on 1080p and holds 720p, a player that waits for
+its ads before it starts, and a watch report that measures what was really
+watched.
+
+### Quality
+
+- **`qualityPolicy`.** `PlayoraQualityPolicy(minHeight: 720, startHeight:
+  1080)` opens on the tallest rung at or under `startHeight` and keeps Auto
+  from stepping below `minHeight`, however the link behaves — a rung under
+  the floor is lifted back once the switch settles. The policy wins over a
+  remembered height and over `startupHeightCeiling`, and the quality menu
+  still lists every rendition for a viewer who wants less. A ladder with
+  nothing that tall plays its tallest rung; one with unknown heights keeps
+  them all.
+
+### Playback
+
+- **`loading` holds the start.** While the host is still fetching what
+  playback depends on — the ad schedule, typically — the player waits instead
+  of letting the film run until a late pre-roll cuts in and restarts it.
+- **`contentKey` swaps the title in place.** Changing it together with `src`
+  hands the player to another title with a fresh ad schedule, resume offer
+  and watch session, starting right away and staying fullscreen — what an
+  up-next screen needs.
+- **`controller.contentEnded`.** True once the content has finished,
+  post-roll included, and there is no next episode to move on to.
+- **A dropped stream is no longer an ending.** mpv reports a connection lost
+  mid-title as the end of the file; a finish well short of the duration now
+  reopens at the playhead instead of running the post-roll, the next episode
+  or `contentEnded`.
+- **A post-roll no longer strands a series.** An episode with a next one
+  moves on after its post-roll exactly as it would without one.
+- **"Slow connection, still loading …"** replaces the loading caption when
+  playback has been pending for six seconds (`PlayerStrings.slowLoading`).
+- **A click while playback is pending no longer pauses it.** The spinner is
+  the answer; pausing only made the wait longer.
+
+### Watch reporting
+
+- **Only real play time counts.** A second is counted while frames are
+  actually moving — not while paused, stalled or seeking.
+- **Quality is the time-weighted average** of the resolutions shown this
+  session, still as "WIDTH*HEIGHT".
+- **Traffic.** `WatchIntervalInfo` now carries `downloadedBytes`,
+  `bytesByHost` and `estimatedBytes`: the newly buffered stretch of timeline
+  times the bitrate the manifest advertises for the playing rung (an MP4's
+  size over its duration), split by the host that served it.
+- **Reports go out one at a time**, so a watch id is never raced by the next
+  report.
+
 ## 0.7.0
 
 Adaptive quality that actually adapts on mobile, a pause button that stays

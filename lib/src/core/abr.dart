@@ -158,6 +158,75 @@ class PlayoraAbrConfig {
   final bool allowRenditionSwitching;
 }
 
+/// How "Auto" trades data for picture, on top of what the link measures.
+///
+/// Leave it out for the bandwidth-first default. Set it to keep the picture
+/// sharp at the cost of traffic — e.g. `minHeight: 720, startHeight: 1080`
+/// opens on 1080p and never lets Auto drop under 720p, however slow the
+/// connection. The quality menu still offers every rendition, so a viewer can
+/// always pick a lower one by hand.
+@immutable
+class PlayoraQualityPolicy {
+  const PlayoraQualityPolicy({this.minHeight, this.startHeight});
+
+  /// Lowest rendition height Auto may drop to. A source with nothing that
+  /// tall plays only its tallest rendition on Auto.
+  final int? minHeight;
+
+  /// Height to open on: the tallest rendition at or below it, or the shortest
+  /// one above it when there is none. Wins over a height remembered from a
+  /// previous session and over [PlayoraAbrConfig.startupHeightCeiling].
+  final int? startHeight;
+
+  /// Index of the lowest rung Auto may use in an ascending [ladder].
+  ///
+  /// A ladder whose heights are unknown cannot honour a height policy, so it
+  /// keeps every rung.
+  int floorIndex(List<AbrLevel> ladder) {
+    final min = minHeight;
+    if (min == null || min <= 0 || ladder.isEmpty) return 0;
+    if (ladder.any((level) => level.height <= 0)) return 0;
+    for (final level in ladder) {
+      if (level.height >= min) return level.index;
+    }
+    return ladder.last.index;
+  }
+
+  /// The rung [startHeight] asks for among the rungs Auto may use, or null
+  /// when the policy leaves the opening pick to the governor.
+  AbrLevel? startLevel(List<AbrLevel> ladder) {
+    final start = startHeight;
+    if (start == null || ladder.isEmpty) return null;
+    final floor = floorIndex(ladder);
+    final allowed = [
+      for (final level in ladder)
+        if (level.index >= floor) level,
+    ];
+    AbrLevel? atOrBelow;
+    for (final level in allowed) {
+      if (level.height <= start &&
+          (atOrBelow == null || level.height >= atOrBelow.height)) {
+        atOrBelow = level;
+      }
+    }
+    if (atOrBelow != null) return atOrBelow;
+    AbrLevel? shortest;
+    for (final level in allowed) {
+      if (shortest == null || level.height < shortest.height) shortest = level;
+    }
+    return shortest;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is PlayoraQualityPolicy &&
+      other.minHeight == minHeight &&
+      other.startHeight == startHeight;
+
+  @override
+  int get hashCode => Object.hash(minHeight, startHeight);
+}
+
 /// One rung of the quality ladder the governor can select.
 @immutable
 class AbrLevel {
@@ -206,10 +275,15 @@ class PlayoraAbrGovernor {
     required this.stalled,
     required this.onSwitch,
     this.overloaded,
+    this.policy,
     this.onLog,
   });
 
   final PlayoraAbrConfig config;
+
+  /// The host's quality policy, re-read every tick so it can change while a
+  /// source plays. Null keeps the bandwidth-first default.
+  final PlayoraQualityPolicy? Function()? policy;
 
   /// The ladder, ascending by quality. Re-read every tick — HLS track lists
   /// arrive after the first frames.
@@ -315,17 +389,35 @@ class PlayoraAbrGovernor {
   /// cannot carry it is a long black screen followed by the downshifts the
   /// measurement was always going to force. Climbing back costs one switch
   /// twenty seconds in, by which time the buffer can absorb it.
+  ///
+  /// A [PlayoraQualityPolicy.startHeight] replaces all of that, and a
+  /// [PlayoraQualityPolicy.minHeight] keeps the result from opening under it.
   int? startupCeiling(int? rememberedHeight) {
+    final rules = policy?.call();
+    final start = rules?.startHeight;
+    if (start != null) return start;
     final ceiling = config.startupHeightCeiling;
-    if (rememberedHeight == null) return ceiling;
-    if (ceiling == null) return rememberedHeight;
-    return rememberedHeight < ceiling ? rememberedHeight : ceiling;
+    final int? picked;
+    if (rememberedHeight == null) {
+      picked = ceiling;
+    } else if (ceiling == null) {
+      picked = rememberedHeight;
+    } else {
+      picked = rememberedHeight < ceiling ? rememberedHeight : ceiling;
+    }
+    final min = rules?.minHeight;
+    if (picked != null && min != null && picked < min) return min;
+    return picked;
   }
 
   /// The rung to open a fresh source with, given an optional remembered
   /// height from a previous session.
   AbrLevel? startupLevel(List<AbrLevel> ladder, {int? rememberedHeight}) {
     if (ladder.isEmpty) return null;
+    final rules = policy?.call();
+    final requested = rules?.startLevel(ladder);
+    if (requested != null) return requested;
+    final floor = rules?.floorIndex(ladder) ?? 0;
     final ceiling = startupCeiling(rememberedHeight);
     if (ceiling == null) return ladder.last;
     AbrLevel? best;
@@ -335,8 +427,13 @@ class PlayoraAbrGovernor {
         best = level;
       }
     }
-    return best ?? ladder.first;
+    final picked = best ?? ladder.first;
+    return picked.index < floor ? ladder[floor] : picked;
   }
+
+  /// Index of the lowest rung Auto may use in [ladder] under the policy.
+  int floorIndex(List<AbrLevel> ladder) =>
+      policy?.call()?.floorIndex(ladder) ?? 0;
 
   @visibleForTesting
   void tick() => _tick();
@@ -376,9 +473,20 @@ class PlayoraAbrGovernor {
 
     final safeIndex = index.clamp(0, ladder.length - 1);
     final current = ladder[safeIndex];
+    final floor = floorIndex(ladder).clamp(0, ladder.length - 1);
     final sinceSwitch = _lastSwitchAt == null
         ? null
         : now.difference(_lastSwitchAt!);
+
+    // Under the policy's floor — handed back from a low manual pick, or the
+    // policy itself just changed. That is not a measurement question.
+    if (safeIndex < floor) {
+      if (sinceSwitch == null || sinceSwitch >= config.switchSettleTime) {
+        _goodTicks = 0;
+        _switch(ladder[floor], AbrDecision.hold, 'policy floor');
+      }
+      return;
+    }
     // Every switch costs a beat of re-buffering while the new rung fills its
     // cache. Reading that as a failing link would make the governor chase its
     // own tail all the way to the bottom rung.
@@ -405,7 +513,7 @@ class PlayoraAbrGovernor {
     // to lose, and on a switch that is how a ladder walks itself to the
     // bottom one reload at a time.
     final losing = !startingUp && !settling && (struggling || tooHeavy);
-    if (losing && safeIndex > 0) {
+    if (losing && safeIndex > floor) {
       if (sinceSwitch == null || sinceSwitch >= config.downshiftCooldown) {
         _goodTicks = 0;
         // Drop straight onto the rung the link can actually carry. Walking
@@ -414,7 +522,7 @@ class PlayoraAbrGovernor {
         // decode says nothing about bandwidth, so that case steps down by one
         // rung and measures again.
         final target = struggling
-            ? _affordableIndex(ladder, current).clamp(0, safeIndex - 1)
+            ? _affordableIndex(ladder, current).clamp(floor, safeIndex - 1)
             : safeIndex - 1;
         // The rung being left just failed: keep the ladder capped at what the
         // link demonstrably carries until the cap has relaxed back up there.

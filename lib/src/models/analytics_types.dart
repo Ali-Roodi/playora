@@ -202,6 +202,9 @@ class WatchIntervalInfo {
     required this.position,
     this.quality,
     this.userWatchId,
+    this.downloadedBytes,
+    this.bytesByHost,
+    this.estimatedBytes,
   });
 
   /// Accumulated wall-clock seconds the viewer actually spent playing.
@@ -210,13 +213,26 @@ class WatchIntervalInfo {
   /// Current playback position, in seconds.
   final double position;
 
-  /// Current resolution as "W*H" with a literal asterisk (e.g. "1920*1080"),
-  /// or "" when unknown.
+  /// Resolution as "W*H" with a literal asterisk (e.g. "1920*1080"): the
+  /// time-weighted average of what played this session, or "" when unknown.
   final String? quality;
 
   /// The id returned by the previous handler call, chained back so the
   /// back-end can update the same watch record.
   final String? userWatchId;
+
+  /// Bytes of media fetched since the session started, summed over
+  /// [bytesByHost]. Null until the player can size the stream.
+  final int? downloadedBytes;
+
+  /// [downloadedBytes] split by the host that served them, so a CDN bill
+  /// can be checked against it.
+  final Map<String, int>? bytesByHost;
+
+  /// The part of [downloadedBytes] derived from the buffered timeline and
+  /// the advertised bitrate rather than counted off the wire. mpv does not
+  /// surface per-segment byte counts, so on this player it is all of it.
+  final int? estimatedBytes;
 }
 
 /// Periodic "user watch" reporter for an external (pre-Logplex) tracker.

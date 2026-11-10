@@ -11,7 +11,12 @@ library;
 export 'src/analytics/client.dart' show LogplexAnalyticsClient;
 export 'src/analytics/watch_interval.dart' show WatchIntervalReporter;
 export 'src/core/abr.dart'
-    show AbrDecision, AbrLevel, PlayoraAbrConfig, PlayoraAbrGovernor;
+    show
+        AbrDecision,
+        AbrLevel,
+        PlayoraAbrConfig,
+        PlayoraAbrGovernor,
+        PlayoraQualityPolicy;
 export 'src/core/buffering.dart'
     show PlayoraBufferConfig, PlayoraBufferProfile;
 export 'src/core/hls_manifest.dart'

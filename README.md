@@ -235,6 +235,8 @@ PlayoraPlayer(
 | `src` / `sources` | `String` / `List<VideoSource>` | HLS/MP4 URL, or MP4 renditions for a manual quality menu. For a non-standard `vodType`, an opaque play token. |
 | `vodType` / `vodCustomUrl` | `VodProvider` / `Map` | Provider token exchange (ABR Hamrahi, Poyan). `{token}` is substituted. |
 | `qualityValidate` | `bool Function(int height)` | Hide embedded renditions whose height fails the predicate. Auto stays. |
+| `qualityPolicy` | `PlayoraQualityPolicy?` | What Auto opens on and the lowest rung it may drop to, e.g. `PlayoraQualityPolicy(minHeight: 720, startHeight: 1080)`. The menu still lists every rendition. |
+| `contentKey` | `String?` | Identity of the title. Changing it with `src` swaps the title in place: fresh ads, resume and watch session, fullscreen kept. |
 | `poster` / `title` / `episodeLabel` | `String` | Cover image and titles above the scrubber. |
 | `thumbnails` | `String` | WebVTT thumbnails track for scrub previews. |
 | `subtitles` | `List<ExternalSubtitle>` | External subtitle files (embedded tracks are auto-detected). |
@@ -253,7 +255,8 @@ PlayoraPlayer(
 | `onWatchInterval` / `watchInterval` | — | External watch heartbeat + cadence (default 5s). |
 | `onPlayerReady` | `ValueChanged<PlayoraController?>` | Imperative control (seek, pause, tracks, …). |
 | `persistSettings` / `settingsKey` | `bool` / `String` | Remember volume/mute/speed/brightness. |
-| `fullscreenOnPlay` / `onBack` / `onLike` / `liked` / `loading` | — | Behavior toggles & host hooks. |
+| `fullscreenOnPlay` / `onBack` / `onLike` / `liked` | — | Behavior toggles & host hooks. |
+| `loading` | `bool` | The host is still fetching what playback depends on (e.g. ads): the start waits for it to clear. |
 | `overlayBuilder` | `List<Widget> Function(BuildContext)` | Extra overlays inside the player surface. |
 
 ## Development

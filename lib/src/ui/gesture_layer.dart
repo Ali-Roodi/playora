@@ -225,8 +225,14 @@ class GestureLayerState extends State<GestureLayer> {
         return;
       }
       _lastTapAt = now;
-      _singleTap = Timer(const Duration(milliseconds: _doubleTapMs),
-          () => widget.controller.togglePlay());
+      _singleTap = Timer(const Duration(milliseconds: _doubleTapMs), () {
+        // A click while playback is still pending is the viewer wondering
+        // whether anything is happening, not asking to pause: the spinner is
+        // the answer, and pausing would only make the wait longer.
+        final state = widget.controller.state.value;
+        if (state.playing && (state.buffering || !state.canPlay)) return;
+        widget.controller.togglePlay();
+      });
     }
   }
 
